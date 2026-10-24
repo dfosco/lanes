@@ -40,6 +40,10 @@ but **Lanes is the work system**, not GitHub Issues.
   A task with an idle agent shows **Workspace idle**, while permission
   requests show **Needs input**. The **Running** filter includes Lanes,
   Goals, or Tasks with active agents, plus parent groupings for active children.
+- **Resource manager:** Observes the daemon host's memory and CPU, then asks
+  Lane Managers to retire old idle dev agents or safely wind down current work
+  when pressure persists. **Lanes settings → Resources** shows measurements,
+  notification state, and editable host thresholds.
 - **Safe identity:** Workspace titles embed the complete Lanes ref; worktree
   branches carry a stable namespace-aware identity even when titles change.
   Agent labels provide a second identity path if a workspace is renamed.
@@ -254,6 +258,107 @@ Workspaces on other Paseo hosts are not read by this first integration:
 install the plugin on each relevant daemon host to view its local
 Lanes projects and executions. Do not interpret a missing local
 workspace as proof no work is running on another host.
+
+## Resource management
+
+The resource manager runs once in the plugin's daemon-side process, including
+when the Lanes screen is closed. It is enabled by default. Configure or disable
+it in **Lanes settings → Resources**; settings apply to this Paseo host and are
+independent of model defaults and each Lane's worker budget.
+
+| Setting | Default |
+|---|---|
+| Sample interval | 15 seconds |
+| Sustained pressure or recovery | 3 consecutive observations for the same resource |
+| Memory warning / critical | 85% / 95% used |
+| CPU warning / critical | 90% / 98% busy across host CPUs |
+| Memory / CPU recovery | Below 80% / 80% used |
+| Repeated notice cooldown | 120 seconds per manager |
+| Old idle priority | At least 5 minutes since the native agent's last update |
+
+Memory uses Linux `MemAvailable`, macOS's query-only `memory_pressure -Q`
+kernel availability percentage, or Windows available physical memory. Linux
+reclaimable cache is included in available memory. CPU is measured from changes
+in host CPU counters; its first observation is unknown. Missing or unsupported
+measurements stay **Unknown** and cannot trigger pressure or claim recovery.
+These are machine-level observations; they do not estimate individual agent
+costs or account for container-specific CPU/memory quotas.
+
+Warning and critical pressure need consecutive samples, so short spikes do not
+produce cleanup requests. A critical signal remains latched until its resource
+stays below the lower recovery threshold. Escalation can bypass the repeated
+notice cooldown. Resource sampling continues during cooldown; directory/CLI
+discovery is limited to at most once every 30 seconds under stable pressure
+(or the sample interval when longer), with immediate eligibility on a measured
+pressure transition. Checks do not overlap.
+
+### What Lane Managers receive
+
+The plugin reads the central `lanes lane manager list --all --json` projection
+and reconciles it with the current daemon's agent/workspace directory and
+project boards. It also supports verified legacy claims and labeled managers.
+Canonical registrations can associate a local manager with several projects;
+the manager's own workspace need not be in each managed repository. A stopped
+association is respected. Missing, archived, closed, conflicting, and remote
+sessions are excluded. Registrations and claims alone never prove liveness.
+
+Dev candidates must have coherent `lanes.ref/projectId/kind` or
+`clips.ref/projectId/kind` labels that agree with their actual workspace project
+and exact Goal/Task membership. Conflicting or incomplete labels are excluded.
+Sharing a workspace, branch name, or title does not make an agent a Lane Dev.
+Live developers on historical closed records are still eligible candidates.
+Managers are protected from being suggested as devs, and a manager receives one
+combined request for its relevant Lanes.
+
+The request asks the manager to:
+
+1. Pause new dev dispatch while resources remain constrained.
+2. Review old idle devs first, then other idle devs. Age and status are hints;
+   verify a durable handoff and absence of ongoing writes before retirement.
+3. If more capacity is needed, ask current developers to checkpoint and hand
+   back their refs, exact candidate, changed paths, checks, decisions, blockers,
+   and remaining work, then retire them at a safe boundary.
+4. Use supported non-destructive close/archive actions, preserve source,
+   worktrees, transcripts and association history, and verify native readback.
+   Process retirement does not close or accept a Goal or Task.
+
+The plugin sends requests to managers; it never directly stops or archives
+agents. Pending human review does not require keeping an otherwise idle worker
+alive. Shared managers are asked to coordinate. A recovery notice goes only to
+previously advised managers that are still observed and associated; it allows
+them to reassess already-authorized work within their existing budget.
+
+### Delivery and lifecycle limits
+
+Before each send, the plugin refreshes the manager and requires an idle,
+unarchived, available session with no active turn or pending input and unchanged
+workspace/identity labels. Busy managers are deferred to later checks. Sends use
+explicit `activeTurnBehavior: "steer"`, with no retry using the interrupting
+default. Paseo 0.11.2 has no atomic send-if-idle or queue-if-busy operation:
+a manager can become busy between refresh and send, and providers without
+steering support can replace that intervening turn. Messages therefore ask
+managers to recheck current resources and session state before acting.
+
+Cooldown is reserved before sending because a timed-out request may already
+have arrived. Failures remain visible in Resources and do not prevent other
+managers from being notified. Invalid settings fail closed; the monitor does
+not silently enable default policy. Disabling monitoring or unloading the
+plugin cancels pending future sends and releases timers, hooks and settings
+listeners; an already submitted send cannot be recalled.
+
+The 0.11.2 SDK supplies its daemon API on lifecycle hooks or RPC invocation.
+Sampling starts on plugin activation, and notification discovery begins after
+the first such callback. After a reload on a completely quiet host, open Lanes
+or wait for native agent activity to bind that context. The Resources panel
+reports **Waiting for Paseo connection** until it is available. Monitoring does
+not create a replacement manager or an extra daemon connection.
+
+The separate host settings document is `resource-manager`; the read-only
+`clips.resource-manager.status` RPC returns its monitor state, latest sample,
+pressure reasons, successfully notified manager count for the current episode,
+deferred-manager count, last notice time, and latest error. Disabling the
+monitor stops further advice; managers should still recheck actual resources
+before resuming any paused dispatch.
 
 ## Development
 

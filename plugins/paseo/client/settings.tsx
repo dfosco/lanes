@@ -10,12 +10,13 @@ import {
 } from "../shared/contracts";
 import { FULL_ACCESS_MODE } from "../shared/permission-modes";
 import { AgentConfigFields } from "./agent-configuration";
+import { ResourceSettings } from "./resource-settings";
 
 type Theme = PluginSurfaceProps["theme"];
-type Section = "collaboration" | AgentRole;
+type Section = "collaboration" | "resources" | AgentRole;
 
 function Nav({ section, setSection, theme }: { section: Section; setSection: (section: Section) => void; theme: Theme }) {
-  const items: [Section, string][] = [["collaboration", "Collaboration"], ["manager", "Lane Manager"], ["dev", "Lane Dev"]];
+  const items: [Section, string][] = [["collaboration", "Collaboration"], ["manager", "Lane Manager"], ["dev", "Lane Dev"], ["resources", "Resources"]];
   return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
     {items.map(([value, label]) => <Pressable key={value} accessibilityRole="button" onPress={() => setSection(value)}
       style={{ borderWidth: 1, borderColor: section === value ? theme.colors.accent : theme.colors.border,
@@ -135,14 +136,14 @@ function RoleSettings({ role, theme, hostId }: { role: AgentRole; theme: Theme; 
 export function SettingsScreen({ theme, host }: PluginSurfaceProps) {
   const settings = useSettings(preferences);
   const [section, setSection] = useState<Section>("collaboration");
-  if (settings.status === "loading") return <ActivityIndicator color={theme.colors.foregroundMuted} />;
-  if (settings.status === "error" || settings.status === "invalid") {
-    return <Text style={{ color: theme.colors.statusDanger }}>Lanes settings unavailable: {settings.error}</Text>;
-  }
   return <View style={{ padding: 12, gap: 8 }}>
     <Text style={{ color: theme.colors.foreground, fontSize: 20, fontWeight: "700" }}>Lanes settings</Text>
     <Nav section={section} setSection={setSection} theme={theme} />
-    {section === "collaboration" ? <CollaborationSettings theme={theme} /> : null}
-    {section === "manager" || section === "dev" ? <RoleSettings key={section} role={section} theme={theme} hostId={host.id} /> : null}
+    {section === "resources" ? <ResourceSettings key={host.id} theme={theme} hostId={host.id} />
+      : settings.status === "loading" ? <ActivityIndicator color={theme.colors.foregroundMuted} />
+        : settings.status === "error" || settings.status === "invalid"
+          ? <Text style={{ color: theme.colors.statusDanger }}>Lanes settings unavailable: {settings.error}</Text>
+          : section === "collaboration" ? <CollaborationSettings theme={theme} />
+            : <RoleSettings key={section} role={section} theme={theme} hostId={host.id} />}
   </View>;
 }
