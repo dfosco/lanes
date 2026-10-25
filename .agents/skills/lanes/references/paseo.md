@@ -143,10 +143,10 @@ workspace state and record missing context. Recreate workers in the requested
 provider with the same unfinished contracts and revision pins, then update the
 current advisory worker association after verifying the replacement identity.
 This exception is specific to that manager request;
-it does not authorize replacing a directly steered dev, another manager's
-worker, or an unrelated session. Continue to use the current host's supported
-session lifecycle and readback capabilities; this reference does not imply that
-every host exposes pause or suspend.
+it does not authorize replacing another manager's worker, a standalone dev
+outside that manager's scope, or an unrelated session. Continue to use the
+current host's supported session lifecycle and readback capabilities; this
+reference does not imply that every host exposes pause or suspend.
 
 Preserve labels from the freshest read and read them back. Full-map replacement
 APIs without revision/CAS support cannot guarantee against a concurrent writer
@@ -162,10 +162,11 @@ computer-use and external-message authorization rules.
 Current dev agents do not need a new session merely to update assigned work.
 When an authorized handoff needs a new top-level owner, reuse a suitable one
 first, except when the Lane Manager provider-continuation procedure above
-requires replacement. Discover configured profiles and their notes. Materialize the requested
-provider/model, permission mode, thinking and feature values; if no profile fits,
-discover live capabilities and report the fallback rather than guessing values.
-Workspace choice follows the request/settings, not a universal isolation default.
+requires replacement. Discover configured profiles and their notes. Materialize
+the requested provider/model, permission mode, thinking and feature values; if
+no profile fits, discover live capabilities and report the fallback rather than
+guessing values. Workspace choice follows the request/settings, not a universal
+isolation default.
 
 For a new manager, read `lane_manager_model` and
 `lane_manager_reasoning_effort`; for a new dev owner, read `lane_dev_model` and
