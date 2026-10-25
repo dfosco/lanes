@@ -132,6 +132,22 @@ or silently relabel an unrelated active outcome. A single `lanes.ref` cannot
 represent several simultaneous Goals. Use separate authorized owners or actual
 supported multi-record association; do not claim nonexistent aggregation.
 
+When a Lane Manager is explicitly asked to continue in `codex`, `claude`, or
+`opencode`, the manager's provider-specific worker replacement exception takes
+precedence over ordinary session reuse. Follow the canonical
+[Lane Manager provider-continuation procedure](../../lane-manager/SKILL.md#explicit-continuation-in-a-provider):
+request a checkpoint, then use a supported non-destructive pause or
+cancel-current-run action for every running dev it manages and verify
+quiescence. If no checkpoint arrives, preserve the available transcript and
+workspace state and record missing context. Recreate workers in the requested
+provider with the same unfinished contracts and revision pins, then update the
+current advisory worker association after verifying the replacement identity.
+This exception is specific to that manager request;
+it does not authorize replacing a directly steered dev, another manager's
+worker, or an unrelated session. Continue to use the current host's supported
+session lifecycle and readback capabilities; this reference does not imply that
+every host exposes pause or suspend.
+
 Preserve labels from the freshest read and read them back. Full-map replacement
 APIs without revision/CAS support cannot guarantee against a concurrent writer
 between read and write; coordinate a single binding writer, report conflicts,
@@ -145,7 +161,8 @@ computer-use and external-message authorization rules.
 
 Current dev agents do not need a new session merely to update assigned work.
 When an authorized handoff needs a new top-level owner, reuse a suitable one
-first. Discover configured profiles and their notes. Materialize the requested
+first, except when the Lane Manager provider-continuation procedure above
+requires replacement. Discover configured profiles and their notes. Materialize the requested
 provider/model, permission mode, thinking and feature values; if no profile fits,
 discover live capabilities and report the fallback rather than guessing values.
 Workspace choice follows the request/settings, not a universal isolation default.
