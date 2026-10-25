@@ -29,6 +29,9 @@
 - Always fold finished developers promptly after their normal handoff, even while
   human Goal review is pending. Preserve worktrees, source, transcripts and work
   records; interrupted work does not become accepted completion.
+- Document explicit provider-specific continuation handoffs for managed Lane Dev
+  sessions across Codex, Claude and OpenCode, including checkpointing, quiescence,
+  capacity and recovery.
 - Retain archived-but-still-live Paseo runtimes when provider shutdown fails so
   they stay visible, counted and retryable. Critical instructions can reach busy
   managers without waiting for an idle turn.
