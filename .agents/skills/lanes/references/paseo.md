@@ -134,6 +134,22 @@ session or silently relabel an unrelated active outcome. A single `lanes.ref` ca
 represent several simultaneous Goals. Use separate authorized owners or actual
 supported multi-record association; do not claim nonexistent aggregation.
 
+When a Lane Manager is explicitly asked to continue in `codex`, `claude`, or
+`opencode`, the manager's provider-specific worker replacement exception takes
+precedence over ordinary session reuse. Follow the canonical
+[Lane Manager provider-continuation procedure](../../lane-manager/SKILL.md#explicit-continuation-in-a-provider):
+request a checkpoint, then use a supported non-destructive pause or
+cancel-current-run action for every running dev it manages and verify
+quiescence. If no checkpoint arrives, preserve the available transcript and
+workspace state and record missing context. Recreate workers in the requested
+provider with the same unfinished contracts and revision pins, then update the
+current advisory worker association after verifying the replacement identity.
+This exception is specific to that manager request;
+it does not authorize replacing another manager's worker, a standalone dev
+outside that manager's scope, or an unrelated session. Continue to use the
+current host's supported session lifecycle and readback capabilities; this
+reference does not imply that every host exposes pause or suspend.
+
 Preserve labels from the freshest read and read them back. Full-map replacement
 APIs without revision/CAS support cannot guarantee against a concurrent writer
 between read and write; coordinate a single binding writer, report conflicts,
@@ -146,9 +162,11 @@ computer-use and external-message authorization rules.
 ## Configure a new session only when needed
 
 Current dev agents do not need a new session merely to update assigned work.
-Continue a suitable top-level owner within its current bounded assignment;
-new work after completion needs a fresh authorized owner. Discover configured
-profiles and their notes. Materialize the requested
+Continue a suitable top-level owner only within its current still-active bounded
+assignment. An explicit provider-continuation request may require replacing its
+managed running devs as described above. Fold the owner promptly when its
+assignment ends; new work after completion needs a fresh authorized owner.
+Discover configured profiles and their notes. Materialize the requested
 provider/model, permission mode, thinking and feature values; if no profile fits,
 discover live capabilities and report the fallback rather than guessing values.
 Workspace choice follows the request/settings, not a universal isolation default.
@@ -246,6 +264,29 @@ Use its stored default of 5 only when the manager is unavailable, stale or
 disabled. Explicit user ceilings and native quotas still apply. Keep reporting
 launches, handoffs, folds and failures so the resource manager can update grants;
 do not treat a one-time status read as an ongoing allocation.
+
+Provider-continuation replacement must account for the original sessions while
+recreating workers. First checkpoint and pause every managed running dev, then
+verify each is quiescent, including settling or inspecting outstanding tools and
+background writes. Native idle status and no active turn alone do not prove the
+workspace is quiescent; treat unknown write activity as pending. A paused or idle
+original still occupies capacity until its native runtime is closed; do not
+assume pausing frees a slot. Read fresh resource status and reserve only the
+replacements that the live grant permits.
+If the live channel is unavailable, stale or disabled, use the configured
+`lane_max_active_agents` fallback and respect explicit user ceilings and native
+quotas. Where available capacity is insufficient, retain originals paused when
+possible. To release capacity for a replacement, persist the latest
+`reassignment` context on the respective Goal and get manager acknowledgment.
+When the resource channel is available, deliver and acknowledge that handoff
+through the channel; otherwise use `lanes handoff record` and have the manager
+read the Goal attachment. Then use the supported normal native fold/closure and
+verify runtime closure before counting the slot as free or reserving against it.
+Preserve original workspace, transcript, Task IDs, attribution and unfinished
+contract. If a fold or launch fails partway, keep verified replacements, leave
+not-yet-folded originals paused, and report already-folded originals as closed
+with their preserved context. Include the exact old-to-new mapping and any
+ambiguous state. Never resume an original silently or launch on another provider.
 
 Always fold a developer promptly after its bounded assignment is finished,
 including during pending human Goal review. For normal completion or warning

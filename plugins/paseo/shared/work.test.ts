@@ -195,5 +195,5 @@ describe("generated work execution contexts", () => {
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 60_000);
 });

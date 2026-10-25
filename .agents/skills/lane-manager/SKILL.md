@@ -393,6 +393,88 @@ Lane Manager's selected model and effort when it resumes or is reused; apply
 the current manager merely to match the saved default. A dev session likewise
 does not replace its own launch selection after starting.
 
+### Explicit continuation in a provider
+
+An explicit user request for this Lane Manager to continue in `codex`, `claude`,
+or `opencode` sets that provider as the target for its managed Lane Dev sessions.
+This is an exception to ordinary worker reuse: inspect native session state and
+identify every actually running Lane Dev managed by this manager in its active
+Lanes scope, including workers already using the requested provider. Do not
+include another manager's workers, unrelated sessions, or stale associations.
+If no managed dev is running, say so and continue the authorized work in the
+requested provider when a new dev launch is needed; do not create a replacement
+just to satisfy the request.
+
+Before replacing any running dev, request a concise checkpoint when the host
+permits: current Task and revision, unfinished work, source/workspace and
+artifact state, uncommitted changes, decisions, and the next safe action. A
+worker response is useful but not required to pause it. If no checkpoint arrives,
+inspect and preserve the available transcript, actual workspace and artifacts,
+and record what context is missing. Keep the same Task IDs, unfinished contract
+and revision pins, source and workspace, artifacts, acceptance state, and original
+attribution/history. Do not create, duplicate, reset or amend Tasks to make the
+handoff easier. After a replacement's native identity is verified, update the
+current advisory worker/association to that identity without changing Task scope
+or rewriting historical attribution. Preserve an old-to-new observed session ID
+mapping in the existing handoff.
+
+Use the host's supported pause or suspend action for every such worker. If the
+host has no pause API, a documented non-destructive interrupt or cancel-current-
+run action that keeps the agent and its workspace available can serve as the
+pause; read back native state and establish that the run is no longer active
+before launching replacements. Also settle or inspect outstanding tools and
+background writes; native idle status and no active turn alone do not prove the
+workspace is quiescent. Treat unknown write activity as pending. A request or
+acknowledgement to pause is not readback. Never kill, delete, or destructively
+tear down the session to imitate a pause. If work preservation or quiescence
+remains unavailable or ambiguous, keep the existing work and report the specific
+limitation; do not launch a replacement that could lose context or write
+concurrently. Preserve unrelated active sessions. Apply the normal Lane budget,
+workspace, and host-topology rules to replacements, reserving capacity before
+each launch.
+
+Pausing does not release resource-manager capacity. After selected originals are
+paused and quiescent, follow the shared [Paseo resource coordination and folding
+procedure](../lanes/references/paseo.md#resource-coordination-and-folding) for
+live capacity or its configured fallback, reservation, durable handoff, native
+closure, and refreshed allocation. Preserve each original's workspace,
+transcript, Task IDs, unfinished contract, revision pins and historical
+attribution. If normal closure cannot be confirmed, keep that original paused
+and its replacement pending; critical pressure keeps the immediate close-first
+path. After partial replacement, do not silently resume originals. Report
+verified replacements, originals folded with preserved context, originals still
+paused, and ambiguous states as the recovery plan.
+
+Discover the requested provider's live models and effort choices. Within that
+provider, use an explicit worker choice when supplied, otherwise the saved
+`lane_dev_*` preference if that exact model and effort are supported; if not,
+choose a supported role-appropriate dev model and effort from the requested
+provider, or use its native default when the launch surface explicitly fixes the
+requested provider. Preserve saved preferences and report requested, launched,
+and host-confirmed effective values separately; report the effective model as
+unknown when the host does not expose it. Never silently launch on another
+provider as a fallback. If the requested provider cannot launch a dev or its
+provider-constrained launch has no supported default, report the blocker rather
+than crossing providers.
+
+Launch replacements only after the old workers are verified paused. Use the
+same repository and workspace, contract and revision pins, source basis,
+scope, criteria, budget, contact, and return conditions, with a clear
+continuation checkpoint and the requested provider. Verify each new session's
+actual identity, provider/model when exposed, workspace, association, and
+required topology before treating it as active. If creation fails, first
+reconcile whether a session exists. For partial or ambiguous replacement,
+keep verified replacements, leave not-yet-folded originals paused, and report
+already-folded originals as closed with their preserved context. Include the
+old-to-new mapping and exact recovery state, including any ambiguous sessions.
+Do not duplicate an ambiguous launch, silently resume an original, or reset the
+batch to recover.
+
+This provider-specific worker handoff does not change the current Lane Manager's
+selected model or effort, the delivery-mode choice, approval gates, or scope.
+Ordinary manager resumes and worker continuations continue to follow the default
+reuse rules above.
+
 Before launch, discover the exact models and reasoning-effort values supported
 by the current host's model catalog, help, or native tool schema. Do not assume
 one catalog across hosts, derive a ranking from model names, or pass guessed
