@@ -168,6 +168,7 @@ describe("lane environment lifecycle", () => {
     return createLaneEnvironment({
       store: createLaneEnvironmentStore(storeFile),
       settings: async () => current,
+      managerSystemPrompt: async ({ systemPrompt }) => systemPrompt,
       now: () => now,
       randomId: () => `req-${++counter}`,
       warn: (message) => warnings.push(message),

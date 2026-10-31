@@ -1,5 +1,9 @@
 
 import type { PluginServerContext } from "@getpaseo/plugin/server";
+import { composeRoleSystemPrompt, hasRoleMarker, roleHasGuidance } from "./shared/agent-roles";
+import { loadAgentRoles } from "./server/agent-role-source";
+import { defaultSkillRoots, resolveSkills } from "./server/agent-skills";
+import { registerAgentRoles } from "./server/agent-roles-register";
 import { createResourceManager } from "./server/resource-manager";
 import { resourceManagerPreferences, resourceManagerStatusRpc } from "./shared/resource-manager";
 import { resourceChannelRpc, resourceFoldRpc, resourceHandoffRpc } from "./shared/resource-channel";
@@ -23,6 +27,14 @@ import {
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(preferences);
+  // Register the role settings/source before the create hook can attempt to elect and compose a manager.
+  const disposeAgentRoles = registerAgentRoles(server, {
+    readPreferences: async () => {
+      const state = await settings.read();
+      if (state.status !== "ready") throw new Error(`Lanes preferences are invalid: ${state.error}`);
+      return state.values;
+    },
+  });
   const resourceSettings = server.registerSettings(resourceManagerPreferences);
   const resources = createResourceManager({ readSettings: async () => {
     const state = await resourceSettings.read();
@@ -39,6 +51,16 @@ export default function contribute(server: PluginServerContext) {
       const state = await environmentSettings.read();
       if (state.status !== "ready") throw new Error(`Lanes environment settings are invalid: ${state.error}`);
       return state.values;
+    },
+    managerSystemPrompt: async (config) => {
+      const existing = config.systemPrompt;
+      if (existing && hasRoleMarker(existing, { id: "lane-manager" })) return existing;
+      const { roles } = await loadAgentRoles();
+      const role = roles.find((item) => item.id === "lane-manager");
+      if (!role) throw new Error("The built-in lane-manager role is missing from host role settings; restore it before creating a manager.");
+      if (!roleHasGuidance(role)) throw new Error("The lane-manager role has no instructions or skills; restore its guidance before creating a manager.");
+      const skills = resolveSkills(role.skills, defaultSkillRoots(config.cwd));
+      return composeRoleSystemPrompt(role, skills, existing);
     },
   });
   // SDK 0.11.2 first supplies its subprocess-owned API through a hook or RPC.
@@ -113,6 +135,7 @@ export default function contribute(server: PluginServerContext) {
     folding.dispose();
     resources.dispose();
     unsubscribeSettings();
+    disposeAgentRoles();
     for (const release of releases) release();
   };
 }

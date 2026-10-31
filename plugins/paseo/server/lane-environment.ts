@@ -26,6 +26,8 @@ export type EnvironmentAgent = {
 export type LaneEnvironmentDependencies = {
   store: LaneEnvironmentStore;
   settings: () => Promise<LaneEnvironmentSettings>;
+  /** Compose the elected manager role into the create-time system prompt. */
+  managerSystemPrompt: (config: { cwd: string; systemPrompt?: string }) => Promise<string | undefined>;
   now?: () => number;
   randomId?: () => string;
   warn?: (message: string) => void;
@@ -120,17 +122,23 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
      * so the workspace is matched by exact directory. Failures fail open to "no
      * claim", which never creates a second manager.
      */
-    async beforeAgentCreate<Request extends { config: { cwd: string; title?: string | null; internal?: boolean } }>(
+    async beforeAgentCreate<Request extends { config: { cwd: string; title?: string | null; internal?: boolean; systemPrompt?: string } }>(
       request: Request,
       paseo: PaseoApi,
     ): Promise<Request | undefined> {
       if (request.config.internal) return undefined;
+      const explicitRoles = [...(request.config.systemPrompt ?? "").matchAll(/\[Lanes role: ([a-z0-9-]+) r\d+\]/g)]
+        .map((match) => match[1]);
+      // An explicitly selected non-manager role is authoritative. A pre-composed manager role may
+      // still win the workspace's first-manager claim, but the shared composer leaves it intact.
+      if (explicitRoles.some((role) => role !== "lane-manager")) return undefined;
+      let claimed: { result: { title: string; requestId: string } | null };
       try {
         const current = await settings();
         if (!current.firstAgentManager) return undefined;
         const workspaceId = await workspaceIdForDirectory(paseo, request.config.cwd);
         if (!workspaceId) return undefined;
-        const claimed = await store.mutate(undefined, (state) => {
+        claimed = await store.mutate(undefined, (state) => {
           const record = state.workspaces[workspaceId];
           if (!effectiveActivation(current, workspaceId, record).enabled) return null;
           if (record?.managerId) return null;
@@ -138,15 +146,39 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
           if (record?.pendingManager && isFresh(record.pendingManager.startedAt, now(), PENDING_MANAGER_TTL_MS)) return null;
           const title = composeRoleTitle("lane-manager", topicOf(request.config.title, current) || "Lane", current);
           const next = state.workspaces[workspaceId] ?? blankRecord();
-          next.pendingManager = { requestId: randomId(), title, startedAt: now(), agentId: null };
+          const requestId = randomId();
+          next.pendingManager = { requestId, title, startedAt: now(), agentId: null };
           state.workspaces[workspaceId] = next;
-          return { title };
+          return { title, requestId };
         });
-        if (!claimed.result) return undefined;
-        return { ...request, config: { ...request.config, title: claimed.result.title } };
       } catch (error) {
         warn(`[paseo] Lanes manager election skipped: ${String(error)}`);
         return undefined;
+      }
+      if (!claimed.result) return undefined;
+
+      try {
+        const systemPrompt = await dependencies.managerSystemPrompt(request.config);
+        return {
+          ...request,
+          config: {
+            ...request.config,
+            title: claimed.result.title,
+            ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+          },
+        };
+      } catch (error) {
+        try {
+          await store.mutate(undefined, (state) => {
+            const record = Object.values(state.workspaces).find((item) => item.pendingManager?.requestId === claimed.result!.requestId);
+            if (record) record.pendingManager = null;
+          });
+        } catch (rollbackError) {
+          warn(`[paseo] Lanes manager claim rollback failed: ${String(rollbackError)}`);
+        }
+        // Required role configuration/skills are not optional: fail the create visibly instead of
+        // silently producing a manager session with incomplete instructions.
+        throw error;
       }
     },
 
