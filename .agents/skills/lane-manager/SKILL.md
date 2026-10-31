@@ -20,6 +20,11 @@ Turn an authorized request into a complete delivery flow, not just a backlog.
 Protect the user's attention, scope and maintenance budget. Challenge unnecessary
 work with evidence, but do not silently shrink the agreed outcome.
 
+## Provider usage and failover
+
+Follow [provider quota awareness and failover](../lanes/references/provider-failover.md) when dispatching work through Paseo. Read fresh host-owned quota reports before selecting a provider, evaluating the most-consumed applicable window. Treat 95% usage as a dispatch threshold, not proof that an existing agent can safely be replaced immediately. If a provider must change, use a durable checkpoint, verified quiescence and the existing provider-continuation handoff procedure. Never silently choose an unapproved paid provider or claim automatic monitoring exists when it has not been wired.
+
+
 ## Model selection and reasoning effort
 
 Follow [model routing and reasoning policy](../lanes/references/model-routing.md) when delegating authorized development work. Choose an initial dev model from the actual Task complexity and live host capabilities, respecting explicit user preferences and project/user defaults. Preserve the existing delivery-mode gate, work contracts, and host-specific launch/readback requirements.
