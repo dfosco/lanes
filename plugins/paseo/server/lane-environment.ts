@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import type { PaseoApi } from "@getpaseo/client";
 import {
   composeRoleTitle, formerManagerTitle, topicOf, type LaneEnvironmentSettings,
@@ -15,6 +18,7 @@ export const CONTINUATION_TTL_MS = 5 * 60_000;
 export type EnvironmentAgent = {
   id: string;
   workspaceId: string | null;
+  cwd: string | null;
   title: string | null;
   archivedAt: string | null;
   status: string | null;
@@ -28,6 +32,8 @@ export type LaneEnvironmentDependencies = {
   settings: () => Promise<LaneEnvironmentSettings>;
   /** Compose the elected manager role into the create-time system prompt. */
   managerSystemPrompt: (config: { cwd: string; systemPrompt?: string }) => Promise<string | undefined>;
+  /** Public Paseo CLI runner. Injectable so host targeting and rename recovery are testable. */
+  runPaseoCli?: (args: readonly string[]) => Promise<string>;
   now?: () => number;
   randomId?: () => string;
   warn?: (message: string) => void;
@@ -92,6 +98,146 @@ async function readAgent(paseo: PaseoApi, agentId: string): Promise<EnvironmentA
   return refreshed.agent as unknown as EnvironmentAgent;
 }
 
+const runPaseoCli = (args: readonly string[]): Promise<string> => new Promise((resolve, reject) => {
+  execFile("paseo", [...args], { encoding: "utf8", timeout: 10_000, maxBuffer: 2 * 1024 * 1024 }, (error, stdout) => {
+    if (error) reject(error);
+    else resolve(stdout);
+  });
+});
+
+const cliField = (record: Record<string, unknown>, ...keys: string[]): unknown => {
+  for (const key of keys) if (Object.hasOwn(record, key)) return record[key];
+  return undefined;
+};
+
+function normalizedDirectory(directory: string): string {
+  const expanded = directory === "~" ? os.homedir()
+    : directory.startsWith("~/") ? path.join(os.homedir(), directory.slice(2))
+      : directory;
+  return path.normalize(path.resolve(expanded));
+}
+
+function parseCliJson(output: string, command: string): unknown {
+  try { return JSON.parse(output); }
+  catch (error) { throw new EnvironmentError(`Paseo CLI ${command} returned invalid JSON: ${String(error)}`); }
+}
+
+type RenameObservation = {
+  agent: EnvironmentAgent;
+  cliListName: string | null;
+  cliInspectName: string | null;
+};
+
+async function observeRenameTarget(
+  paseo: PaseoApi,
+  runCli: (args: readonly string[]) => Promise<string>,
+  input: { agentId: string; workspaceId: string; expectedCwd: string },
+): Promise<RenameObservation> {
+  const agent = await readAgent(paseo, input.agentId);
+  if (agent.id !== input.agentId) throw new EnvironmentError(`Paseo SDK readback returned agent ${agent.id}, not ${input.agentId}.`);
+  if (agent.workspaceId !== input.workspaceId) {
+    throw new EnvironmentError(`Agent ${input.agentId} is in workspace ${agent.workspaceId ?? "unknown"}, not ${input.workspaceId}.`);
+  }
+  if (!agent.cwd || normalizedDirectory(agent.cwd) !== normalizedDirectory(input.expectedCwd)) {
+    throw new EnvironmentError(`Agent ${input.agentId} cwd does not match its observed workspace directory.`);
+  }
+
+  const [listOutput, inspectOutput] = await Promise.all([
+    runCli(["ls", "--global", "--json"]),
+    runCli(["inspect", input.agentId, "--json"]),
+  ]);
+  const listed = parseCliJson(listOutput, "ls --global --json");
+  if (!Array.isArray(listed)) throw new EnvironmentError("Paseo CLI global agent list was not an array.");
+  const matches = listed.filter((entry): entry is Record<string, unknown> =>
+    Boolean(entry && typeof entry === "object" && cliField(entry as Record<string, unknown>, "id", "Id") === input.agentId));
+  if (matches.length !== 1) throw new EnvironmentError(`Paseo CLI global list did not contain exactly one agent ${input.agentId}.`);
+  const listedCwd = cliField(matches[0], "cwd", "Cwd");
+  const listedName = cliField(matches[0], "name", "Name", "title", "Title");
+  if (typeof listedCwd !== "string" || normalizedDirectory(listedCwd) !== normalizedDirectory(agent.cwd)) {
+    throw new EnvironmentError(`Paseo CLI global list cwd does not match agent ${input.agentId} in workspace ${input.workspaceId}.`);
+  }
+  if (listedName !== null && typeof listedName !== "string") throw new EnvironmentError("Paseo CLI global list returned an invalid agent name.");
+
+  const inspected = parseCliJson(inspectOutput, `inspect ${input.agentId} --json`);
+  if (!inspected || typeof inspected !== "object") throw new EnvironmentError(`Paseo CLI inspect returned no agent ${input.agentId}.`);
+  const detail = inspected as Record<string, unknown>;
+  const inspectedId = cliField(detail, "id", "Id");
+  const inspectedCwd = cliField(detail, "cwd", "Cwd");
+  const inspectedName = cliField(detail, "name", "Name", "title", "Title");
+  if (inspectedId !== input.agentId) throw new EnvironmentError(`Paseo CLI inspect returned agent ${String(inspectedId)}, not ${input.agentId}.`);
+  if (typeof inspectedCwd !== "string" || normalizedDirectory(inspectedCwd) !== normalizedDirectory(agent.cwd)) {
+    throw new EnvironmentError(`Paseo CLI inspect cwd does not match agent ${input.agentId} in workspace ${input.workspaceId}.`);
+  }
+  if (inspectedName !== null && typeof inspectedName !== "string") throw new EnvironmentError("Paseo CLI inspect returned an invalid agent name.");
+  if (listedName === undefined || inspectedName === undefined) throw new EnvironmentError("Paseo CLI did not expose the agent name needed for safe rename verification.");
+  return { agent, cliListName: listedName as string | null, cliInspectName: inspectedName as string | null };
+}
+
+const titleMatches = (observation: RenameObservation, title: string | null): boolean =>
+  observation.agent.title === title && observation.cliListName === title && observation.cliInspectName === title;
+
+type FormerTitleResult = { applied: boolean; error: string | null };
+
+/** Rename only after the public CLI and this hook's SDK context agree on exact agent/workspace identity. */
+async function applyFormerManagerTitle(
+  paseo: PaseoApi,
+  runCli: (args: readonly string[]) => Promise<string>,
+  input: {
+    agentId: string; workspaceId: string; expectedCwd: string; previousTitle: string | null;
+    formerTitle: string; isStillFormerManager: () => Promise<boolean>;
+  },
+): Promise<FormerTitleResult> {
+  const identity = { agentId: input.agentId, workspaceId: input.workspaceId, expectedCwd: input.expectedCwd };
+  try {
+    if (!await input.isStillFormerManager()) throw new EnvironmentError("The manager changed before the former-manager title could be applied.");
+    const before = await observeRenameTarget(paseo, runCli, identity);
+    if (!titleMatches(before, input.previousTitle)) {
+      throw new EnvironmentError(`The old manager title did not match native and CLI readback; refusing to rename ${input.agentId}.`);
+    }
+    if (!await input.isStillFormerManager()) throw new EnvironmentError("The manager changed before the former-manager title could be applied.");
+  } catch (error) {
+    return { applied: false, error: `Former-manager title was not changed: ${String(error)}` };
+  }
+
+  let updateError: unknown;
+  try {
+    await runCli(["agent", "update", input.agentId, "--name", input.formerTitle, "--json"]);
+  } catch (error) {
+    updateError = error;
+  }
+
+  const observe = async () => observeRenameTarget(paseo, runCli, identity);
+  let after: RenameObservation | null = null;
+  let readbackError: unknown;
+  try { after = await observe(); } catch (error) { readbackError = error; }
+  if (after && titleMatches(after, input.formerTitle)) return { applied: true, error: null };
+
+  // A failed command may have mutated before exiting. Retry readback once; rollback only if all
+  // three public/native views now agree on the exact new title and manager state is still current.
+  if (!after || !titleMatches(after, input.previousTitle)) {
+    try { after = await observe(); } catch (error) { readbackError = error; }
+    if (after && titleMatches(after, input.formerTitle)) {
+      try {
+        if (!await input.isStillFormerManager()) throw new EnvironmentError("The manager changed during title readback; refusing rollback.");
+        if (input.previousTitle === null) throw new EnvironmentError("The prior title was empty and cannot be restored with the public CLI.");
+        await runCli(["agent", "update", input.agentId, "--name", input.previousTitle, "--json"]);
+        const restored = await observe();
+        if (!titleMatches(restored, input.previousTitle)) throw new EnvironmentError("The previous title did not match after rollback.");
+      } catch (rollbackError) {
+        const cause = updateError ? ` CLI update error: ${String(updateError)}.` : "";
+        return { applied: false, error: `Former-manager title readback failed and rollback was not confirmed: ${String(rollbackError)}.${cause}` };
+      }
+      const cause = updateError ? ` CLI update error: ${String(updateError)}.` : "";
+      return { applied: false, error: `Former-manager title readback mismatched; the original title was restored.${cause}` };
+    }
+  }
+
+  const details = readbackError ? String(readbackError)
+    : `expected ${JSON.stringify(input.formerTitle)}, observed ${JSON.stringify(after?.agent.title)}`;
+  const updateDetails = updateError ? ` CLI update error: ${String(updateError)}.` : "";
+  return { applied: false, error: `Former-manager title was not confirmed: ${details}.${updateDetails}` };
+}
+
 const isQuiescent = (agent: EnvironmentAgent): boolean =>
   agent.status !== "running" && agent.activeTurn == null && (agent.pendingPermissions?.length ?? 0) === 0;
 
@@ -101,6 +247,7 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
   const { store, settings } = dependencies;
   const now = dependencies.now ?? Date.now;
   const randomId = dependencies.randomId ?? randomUUID;
+  const runCli = dependencies.runPaseoCli ?? runPaseoCli;
   const warn = dependencies.warn ?? ((message: string) => console.warn(message));
 
   return {
@@ -228,20 +375,46 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
         record.managerId = agent.id;
         record.pendingManager = null;
         state.workspaces[input.workspaceId] = record;
-        return viewOf(input.workspaceId, state, current);
+        return { workspace: viewOf(input.workspaceId, state, current), previousManagerId: previous };
       });
+
+      let formerManagerTitleApplied: boolean | null = null;
+      let formerManagerTitleError: string | null = null;
+      let formerManagerAdvisoryTitle: string | null = null;
+      if (result.previousManagerId && result.previousManagerId !== agent.id) {
+        formerManagerAdvisoryTitle = formerManagerTitle("Lane");
+        try {
+          const previous = await readAgent(paseo, result.previousManagerId);
+          const topic = topicOf(previous.title, current) || "Lane";
+          formerManagerAdvisoryTitle = formerManagerTitle(topic);
+          const titleResult = await applyFormerManagerTitle(paseo, runCli, {
+            agentId: previous.id, workspaceId: input.workspaceId, expectedCwd: previous.cwd ?? "",
+            previousTitle: previous.title, formerTitle: formerManagerTitle(topic),
+            isStillFormerManager: async () => (await store.read()).workspaces[input.workspaceId]?.managerId === agent.id,
+          });
+          formerManagerTitleApplied = titleResult.applied;
+          formerManagerTitleError = titleResult.error;
+        } catch (error) {
+          formerManagerTitleApplied = false;
+          formerManagerTitleError = `Former-manager title was not changed: ${String(error)}`;
+        }
+      }
       return {
         storeRevision,
-        workspace: result,
+        workspace: result.workspace,
         titleApplied: false as const,
         advisoryTitle: composeRoleTitle("lane-manager", topic, current),
+        formerManagerTitleApplied,
+        formerManagerTitleError,
+        formerManagerAdvisoryTitle,
       };
     },
 
     /**
      * Explicit continuation. Creates a new session in the same workspace with the
-     * checkpoint as its initial prompt. The previous session keeps its transcript
-     * and title. Nothing is forked, cloned or moved to another provider.
+     * checkpoint as its initial prompt. The previous session keeps its transcript;
+     * after promotion, a verified public CLI call attempts to mark its title as former.
+     * Nothing is forked, cloned or moved to another provider.
      */
     async continueManager(paseo: PaseoApi, input: { workspaceId: string; fromAgentId: string; expectedRevision?: number; checkpoint: string }) {
       const current = await settings();
@@ -308,6 +481,12 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
         throw new EnvironmentError(`Created session ${created.id}, but recording it failed: ${String(error)}. Retry continuation with the same checkpoint to reconcile.`);
       });
 
+      const titleResult = await applyFormerManagerTitle(paseo, runCli, {
+        agentId: from.id, workspaceId: input.workspaceId, expectedCwd: from.cwd ?? "",
+        previousTitle: from.title, formerTitle: formerManagerTitle(topic),
+        isStillFormerManager: async () => (await store.read()).workspaces[input.workspaceId]?.managerId === created.id,
+      });
+
       let demotionNotice: "sent" | "failed" = "sent";
       try {
         await paseo.agents.ref(input.fromAgentId).send(
@@ -326,8 +505,11 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
         limitations: [
           "The new session is not a native fork or transcript clone; history is available only through the checkpoint.",
           "No provider switch was performed; the new session uses the previous manager's provider and model.",
-          `The previous manager keeps its existing title because Paseo's public SDK cannot rename an existing agent. Advisory title: ${formerManagerTitle(topic)}.`,
+          ...(titleResult.applied ? [] : [`The previous manager title was not changed: ${titleResult.error}.`]),
         ],
+        titleApplied: titleResult.applied,
+        titleError: titleResult.error,
+        advisoryTitle: formerManagerTitle(topic),
       };
     },
   };

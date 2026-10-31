@@ -83,7 +83,7 @@ export function composeRoleTitle(role: LaneRole, topic: string, settings: LaneEn
   return clampTitle(`${roleTitlePrefix(role, settings)}${topic.trim() || "Lane"}`);
 }
 
-/** Title a demoted manager should carry. Paseo's public SDK cannot rename an existing agent, so this is advisory. */
+/** Title a demoted manager should carry; the server applies it only after public CLI/native identity readback agrees. */
 export function formerManagerTitle(topic: string): string {
   return clampTitle(`${FORMER_MANAGER_PREFIX} ${topic.trim() || "Lane"}`);
 }
@@ -132,9 +132,13 @@ export const laneEnvironmentAssignManagerRpc = defineRpc({
   output: z.object({
     storeRevision: z.number().int().nonnegative(),
     workspace: laneEnvironmentWorkspaceView,
-    /** The live title could not be changed; the advisory title is what a person may apply manually. */
+    /** The assigned manager title is not changed by this operation; its advisory title is reported separately. */
     titleApplied: z.literal(false),
     advisoryTitle: z.string(),
+    /** Null means there was no previous manager to rename. */
+    formerManagerTitleApplied: z.boolean().nullable(),
+    formerManagerTitleError: z.string().nullable(),
+    formerManagerAdvisoryTitle: z.string().nullable(),
   }),
 });
 
@@ -154,5 +158,8 @@ export const laneEnvironmentContinueRpc = defineRpc({
     /** Native limits: the new session is not a fork, transcript clone or provider switch. */
     limitations: z.array(z.string()),
     demotionNotice: z.enum(["sent", "failed"]),
+    titleApplied: z.boolean(),
+    titleError: z.string().nullable(),
+    advisoryTitle: z.string(),
   }),
 });
