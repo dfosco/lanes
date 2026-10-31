@@ -88,13 +88,33 @@ export const roleModelDefaults = z.object({
 export type RoleModelDefaults = z.infer<typeof roleModelDefaults>;
 export const roleModelDefaultsRpc = defineRpc({
   name: "clips.role-model-defaults",
-  input: z.object({ role: agentRole, projectId: z.string().optional(), legacyDisabled: z.boolean().optional() }).strict(),
+  input: z.object({ role: agentRole, provider: z.string().optional(), projectId: z.string().optional(), legacyDisabled: z.boolean().optional() }).strict(),
   output: roleModelDefaults,
 });
 export const saveRoleModelDefaultsRpc = defineRpc({
   name: "clips.role-model-defaults.save",
-  input: z.object({ role: agentRole, model: z.string(), reasoningEffort: z.string() }).strict(),
+  input: z.object({ role: agentRole, provider: z.string(), model: z.string(), reasoningEffort: z.string() }).strict(),
   output: roleModelDefaults,
+});
+
+export const modelRoutingPolicy = z.object({
+  version: z.literal(1),
+  providerOrder: z.array(z.string()),
+  modelOrder: z.object({ manager: z.array(z.string()), dev: z.array(z.string()) }).strict(),
+  reasoningEffortOrder: z.array(z.string()),
+  warningThresholds: z.array(z.number().int().min(1).max(99)),
+  handoffThreshold: z.number().int().min(1).max(100),
+}).passthrough();
+export type ModelRoutingPolicy = z.infer<typeof modelRoutingPolicy>;
+export const modelRoutingPolicyRpc = defineRpc({
+  name: "clips.model-routing-policy",
+  input: z.object({}).strict(),
+  output: modelRoutingPolicy,
+});
+export const saveModelRoutingPolicyRpc = defineRpc({
+  name: "clips.model-routing-policy.save",
+  input: modelRoutingPolicy,
+  output: modelRoutingPolicy,
 });
 
 const permissionMode = z.object({

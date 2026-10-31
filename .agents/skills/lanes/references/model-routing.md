@@ -6,6 +6,8 @@ This reference defines two independent decisions. Model routing is owned by Lane
 
 Before launching an authorized Lane Dev, assess the bounded work contract, not just its title. Consider uncertainty, coupling, known dependencies, user speed/cost preference, available models and supported host capabilities. Choose the least costly capable model; do not infer capability from a model name alone.
 
+Read the durable `model_routing_policy` (`lanes config --user model_routing_policy`) and resolve provider-scoped role defaults using the actual Paseo catalog provider ID, for example `lanes config --user --provider codex lane_dev_model`. The saved provider order is the eligible fallback order; the role's qualified model order overrides that provider's default when present. The JSON `reasoningEffortOrder` is the user's persistent low-to-high ordering for supported effort IDs. A direct user request to change this policy is durable: update the user config via the Lanes CLI and read it back. Do not turn that request into a temporary session-only override. Project-specific values still take precedence for that project.
+
 Suggested starting tiers (override with configured preferences and actual host options):
 - Routine and well specified: Luna 6, low reasoning.
 - Normal implementation: Luna 6, medium.
@@ -24,6 +26,6 @@ At the start of a work phase and at meaningful boundaries (new Task, unexpected 
 
 User speed preference biases toward low/medium when safe; thoroughness biases toward medium/high. Task size alone does not imply high complexity. After escalation, reassess when the hard part is resolved and downgrade. Repeated failure requires a change of investigative strategy; do not endlessly retry at high.
 
-Only change settings using a verified host-supported capability targeting the current session. Resolve valid thinking IDs from the live provider; apply changes between turns, then read back effective settings. Do not modify global config, spawn a replacement session, or claim a switch occurred when no supported self-update is available. If unavailable, continue with the current effort and mention the limitation at the next useful handoff.
+Only change a running session's effort using a verified host-supported capability targeting that session. Resolve valid thinking IDs from the live provider and use the saved `reasoningEffortOrder` to select the next supported adjacent level; apply between turns and read back effective settings. Changing the durable policy is a separate user-level action: do it only when the user asks for a lasting change, then read it back. Do not spawn a replacement session or claim a session switch occurred when no supported self-update is available. If unavailable, continue with the current effort and mention the limitation at the next useful handoff.
 
 Keep routing and reasoning decisions lightweight. Do not override explicit user model, cost, or speed constraints. Avoid logging credentials or full prompts.

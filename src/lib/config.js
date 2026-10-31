@@ -41,6 +41,15 @@ export const MODEL_PREFERENCE_DEFAULTS = {
 };
 
 export const MODEL_PREFERENCE_KEYS = Object.keys(MODEL_PREFERENCE_DEFAULTS);
+export const MODEL_ROUTING_POLICY_KEY = 'model_routing_policy';
+export const DEFAULT_MODEL_ROUTING_POLICY = Object.freeze({
+  version: 1,
+  providerOrder: [],
+  modelOrder: { manager: [], dev: [] },
+  reasoningEffortOrder: ['none', 'off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'ultracode'],
+  warningThresholds: [80, 90],
+  handoffThreshold: 95,
+});
 
 export const DELIVERY_CONFIG_KEYS = [
   'lane_dev_max_tasks', 'lane_validation_mode', 'lane_commit_mode', 'lane_pr_mode',
@@ -50,6 +59,43 @@ function modelPreferencePath(scope, repoRoot) {
   if (scope === 'user') return configPathIn(getUserStoreDir());
   if (scope === 'project') return projectConfigPath(repoRoot);
   throw new Error(`Unknown config scope: ${scope}`);
+}
+
+function validateProviderId(provider) {
+  if (typeof provider !== 'string' || !/^[a-z0-9][a-z0-9_-]*$/i.test(provider)) {
+    throw new Error('Provider ID must be a nonempty catalog identifier');
+  }
+  return provider;
+}
+
+function validateRoutingPolicy(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== 1) {
+    throw new Error('model_routing_policy must be a version 1 JSON object');
+  }
+  const order = value.providerOrder;
+  const modelOrder = value.modelOrder;
+  const effortOrder = value.reasoningEffortOrder;
+  const warnings = value.warningThresholds;
+  const handoff = value.handoffThreshold;
+  if (!Array.isArray(order) || order.some((provider) => typeof provider !== 'string' || !/^[a-z0-9][a-z0-9_-]*$/i.test(provider)) ||
+    new Set(order).size !== order.length) throw new Error('providerOrder must contain unique Paseo provider IDs');
+  if (!modelOrder || typeof modelOrder !== 'object' || Array.isArray(modelOrder) ||
+    !['manager', 'dev'].every((role) => Array.isArray(modelOrder[role]) && modelOrder[role].every((model) =>
+      typeof model === 'string' && /^[a-z0-9][a-z0-9_-]*\/.+$/i.test(model)) && new Set(modelOrder[role]).size === modelOrder[role].length)) {
+    throw new Error('modelOrder must provide unique provider/model IDs for manager and dev');
+  }
+  if (!Array.isArray(effortOrder) || effortOrder.length === 0 || effortOrder.some((effort) => typeof effort !== 'string' || !effort.trim()) ||
+    new Set(effortOrder).size !== effortOrder.length) throw new Error('reasoningEffortOrder must contain unique reasoning IDs in preference order');
+  if (!Array.isArray(warnings) || warnings.some((threshold) => !Number.isInteger(threshold) || threshold < 1 || threshold > 99) ||
+    warnings.some((threshold, index) => index > 0 && threshold <= warnings[index - 1])) {
+    throw new Error('warningThresholds must be increasing integer percentages from 1 to 99');
+  }
+  if (!Number.isInteger(handoff) || handoff < 1 || handoff > 100 || warnings.some((threshold) => threshold >= handoff)) {
+    throw new Error('handoffThreshold must be 1–100 and above each warning threshold');
+  }
+  return { ...DEFAULT_MODEL_ROUTING_POLICY, ...value, providerOrder: [...order],
+    modelOrder: { manager: [...modelOrder.manager], dev: [...modelOrder.dev] },
+    reasoningEffortOrder: [...effortOrder], warningThresholds: [...warnings] };
 }
 
 function readStoredConfig(filePath) {
@@ -62,6 +108,16 @@ function readStoredConfig(filePath) {
     for (const key of MODEL_PREFERENCE_KEYS) {
       if (Object.hasOwn(config, key)) validateModelPreference(key, config[key]);
     }
+    if (Object.hasOwn(config, 'provider_model_preferences')) {
+      const byProvider = config.provider_model_preferences;
+      if (!byProvider || typeof byProvider !== 'object' || Array.isArray(byProvider)) throw new Error('provider_model_preferences must be a JSON object');
+      for (const [provider, preferences] of Object.entries(byProvider)) {
+        validateProviderId(provider);
+        if (!preferences || typeof preferences !== 'object' || Array.isArray(preferences)) throw new Error(`Preferences for ${provider} must be a JSON object`);
+        for (const [key, value] of Object.entries(preferences)) validateModelPreference(key, value);
+      }
+    }
+    if (Object.hasOwn(config, MODEL_ROUTING_POLICY_KEY)) validateRoutingPolicy(config[MODEL_ROUTING_POLICY_KEY]);
     return config;
   } catch (error) {
     if (error.code === 'ENOENT') return {};
@@ -98,38 +154,92 @@ function writeConfigFile(filePath, content, { createMode = 0o666 } = {}) {
   }
 }
 
-export function getModelPreference(key, repoRoot = getRepoRoot()) {
-  if (!MODEL_PREFERENCE_KEYS.includes(key)) throw new Error(`Unknown model preference: ${key}`);
-  const project = readStoredConfig(modelPreferencePath('project', repoRoot));
-  if (Object.hasOwn(project, key)) return validateModelPreference(key, project[key]);
-  const user = readStoredConfig(modelPreferencePath('user'));
-  if (Object.hasOwn(user, key)) return validateModelPreference(key, user[key]);
-  return MODEL_PREFERENCE_DEFAULTS[key];
-}
-
-export function getUserModelPreference(key) {
-  if (!MODEL_PREFERENCE_KEYS.includes(key)) throw new Error(`Unknown model preference: ${key}`);
-  const config = readStoredConfig(modelPreferencePath('user'));
+function scopedPreference(config, key, provider) {
+  if (provider && Object.hasOwn(config.provider_model_preferences?.[provider] ?? {}, key)) {
+    return validateModelPreference(key, config.provider_model_preferences[provider][key]);
+  }
   return Object.hasOwn(config, key) ? validateModelPreference(key, config[key]) : null;
 }
 
-export function setModelPreference(key, value, { scope = 'project', repoRoot } = {}) {
-  const normalized = validateModelPreference(key, value);
+export function getModelPreference(key, repoRoot = getRepoRoot(), { provider } = {}) {
+  if (!MODEL_PREFERENCE_KEYS.includes(key)) throw new Error(`Unknown model preference: ${key}`);
+  if (provider) validateProviderId(provider);
+  const project = readStoredConfig(modelPreferencePath('project', repoRoot));
+  const user = readStoredConfig(modelPreferencePath('user'));
+  const projectValue = provider ? project.provider_model_preferences?.[provider]?.[key] : null;
+  if (projectValue !== undefined && projectValue !== null) return validateModelPreference(key, projectValue);
+  const projectGlobal = scopedPreference(project, key);
+  if (projectGlobal !== null) return projectGlobal;
+  const userProvider = provider ? user.provider_model_preferences?.[provider]?.[key] : null;
+  if (userProvider !== null && userProvider !== undefined) return validateModelPreference(key, userProvider);
+  const userGlobal = scopedPreference(user, key);
+  if (userGlobal !== null) return userGlobal;
+  return MODEL_PREFERENCE_DEFAULTS[key];
+}
+
+export function getModelRoutingPolicy(repoRoot, { scope } = {}) {
+  if (scope === 'user') {
+    const user = readStoredConfig(modelPreferencePath('user'));
+    return Object.hasOwn(user, MODEL_ROUTING_POLICY_KEY)
+      ? validateRoutingPolicy(user[MODEL_ROUTING_POLICY_KEY]) : { ...DEFAULT_MODEL_ROUTING_POLICY };
+  }
+  const project = readStoredConfig(modelPreferencePath('project', repoRoot ?? getRepoRoot()));
+  if (Object.hasOwn(project, MODEL_ROUTING_POLICY_KEY)) return validateRoutingPolicy(project[MODEL_ROUTING_POLICY_KEY]);
+  const user = readStoredConfig(modelPreferencePath('user'));
+  return Object.hasOwn(user, MODEL_ROUTING_POLICY_KEY)
+    ? validateRoutingPolicy(user[MODEL_ROUTING_POLICY_KEY]) : { ...DEFAULT_MODEL_ROUTING_POLICY };
+}
+
+export function setModelRoutingPolicy(value, { scope = 'user', repoRoot } = {}) {
+  const policy = validateRoutingPolicy(value);
   const filePath = modelPreferencePath(scope, repoRoot ?? (scope === 'project' ? getRepoRoot() : undefined));
   return withRecordLock(filePath, () => {
     const config = readStoredConfig(filePath);
-    config[key] = normalized;
+    config[MODEL_ROUTING_POLICY_KEY] = policy;
+    writeStoredConfig(filePath, config, { createMode: scope === 'user' ? 0o600 : 0o666 });
+    return policy;
+  });
+}
+
+export function getUserModelPreference(key, { provider } = {}) {
+  if (!MODEL_PREFERENCE_KEYS.includes(key)) throw new Error(`Unknown model preference: ${key}`);
+  const config = readStoredConfig(modelPreferencePath('user'));
+  if (provider) validateProviderId(provider);
+  if (provider && Object.hasOwn(config.provider_model_preferences?.[provider] ?? {}, key)) {
+    return validateModelPreference(key, config.provider_model_preferences[provider][key]);
+  }
+  return Object.hasOwn(config, key) ? validateModelPreference(key, config[key]) : null;
+}
+
+export function setModelPreference(key, value, { scope = 'project', repoRoot, provider } = {}) {
+  const normalized = validateModelPreference(key, value);
+  if (provider) validateProviderId(provider);
+  const filePath = modelPreferencePath(scope, repoRoot ?? (scope === 'project' ? getRepoRoot() : undefined));
+  return withRecordLock(filePath, () => {
+    const config = readStoredConfig(filePath);
+    if (provider) {
+      config.provider_model_preferences ??= {};
+      config.provider_model_preferences[provider] ??= {};
+      config.provider_model_preferences[provider][key] = normalized;
+    } else config[key] = normalized;
     writeStoredConfig(filePath, config, { createMode: scope === 'user' ? 0o600 : 0o666 });
     return normalized;
   });
 }
 
-export function unsetModelPreference(key, { scope = 'project', repoRoot } = {}) {
+export function unsetModelPreference(key, { scope = 'project', repoRoot, provider } = {}) {
   if (!MODEL_PREFERENCE_KEYS.includes(key)) throw new Error(`Unknown model preference: ${key}`);
+  if (provider) validateProviderId(provider);
   const filePath = modelPreferencePath(scope, repoRoot ?? (scope === 'project' ? getRepoRoot() : undefined));
   return withRecordLock(filePath, () => {
     const config = readStoredConfig(filePath);
-    delete config[key];
+    if (provider) {
+      delete config.provider_model_preferences?.[provider]?.[key];
+      if (config.provider_model_preferences?.[provider] && Object.keys(config.provider_model_preferences[provider]).length === 0) {
+        delete config.provider_model_preferences[provider];
+      }
+      if (config.provider_model_preferences && Object.keys(config.provider_model_preferences).length === 0) delete config.provider_model_preferences;
+    } else delete config[key];
     if (fs.existsSync(filePath)) {
       writeStoredConfig(filePath, config, { createMode: scope === 'user' ? 0o600 : 0o666 });
     }

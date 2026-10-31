@@ -6,13 +6,15 @@ import { resourceChannelRpc, resourceFoldRpc, resourceHandoffRpc } from "./share
 import { createResourceFolding } from "./server/resource-folding";
 import {
   agentOptionsRpc, attachmentReadRpc, boardRpc, collaborationRpc, labelUsesRpc, labelsRpc,
-  roleModelDefaultsRpc, saveRoleModelDefaultsRpc, reviewListRpc, reviewOpenRpc, reviewShowRpc, reviewDecideRpc, reviewImportRpc,
+  roleModelDefaultsRpc, saveRoleModelDefaultsRpc, modelRoutingPolicyRpc, saveModelRoutingPolicyRpc,
+  reviewListRpc, reviewOpenRpc, reviewShowRpc, reviewDecideRpc, reviewImportRpc,
   closeRpc, preferences, projectsRpc, startRpc,
 } from "./shared/contracts";
 import {
   closeWork, changeProjectLabels, projectList, readAgentOptions, readProjectAttachment,
   readProjectBoard, readProjectLabelUses, setProjectCollaboration, startWork,
-  readRoleModelDefaults, saveRoleModelDefaults, readProjectReviews, readProjectReview, openProjectReview, decideProjectReview, importProjectReviewDecision,
+  readRoleModelDefaults, saveRoleModelDefaults, readModelRoutingPolicy, saveModelRoutingPolicy,
+  readProjectReviews, readProjectReview, openProjectReview, decideProjectReview, importProjectReviewDecision,
 } from "./server/backend";
 
 export default function contribute(server: PluginServerContext) {
@@ -53,10 +55,12 @@ export default function contribute(server: PluginServerContext) {
     const state = await settings.read();
     const values = state.status === "ready" ? state.values : preferences.schema.parse({});
     return readRoleModelDefaults(paseo, input.role, values, {
-      projectId: input.projectId, legacyDisabled: input.legacyDisabled || values.roles[input.role].legacyModelMigrated,
+      provider: input.provider, projectId: input.projectId, legacyDisabled: input.legacyDisabled || values.roles[input.role].legacyModelMigrated,
     });
   });
   handle(saveRoleModelDefaultsRpc, (input, { paseo }) => saveRoleModelDefaults(paseo, input));
+  handle(modelRoutingPolicyRpc, (_input, { paseo }) => readModelRoutingPolicy(paseo));
+  handle(saveModelRoutingPolicyRpc, (input, { paseo }) => saveModelRoutingPolicy(paseo, input));
   handle(reviewListRpc, (input, { paseo }) => readProjectReviews(paseo, input.projectId));
   handle(reviewOpenRpc, (input, { paseo }) => openProjectReview(paseo, input));
   handle(reviewShowRpc, (input, { paseo }) => readProjectReview(paseo, input));

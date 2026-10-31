@@ -7,6 +7,7 @@ import { SettingsScreen } from "./settings";
 
 const state = vi.hoisted(() => ({
   projectRpc: vi.fn(), boardRpc: vi.fn(), collaborationRpc: vi.fn(), roleDefaultsRpc: vi.fn(), saveRoleDefaultsRpc: vi.fn(),
+  routingPolicyRpc: vi.fn(), saveRoutingPolicyRpc: vi.fn(),
   settingsSave: vi.fn(), cache: [] as any[], collaborationPromise: undefined as undefined | { resolve: (value: any) => void; reject: (error: Error) => void },
 }));
 const values = {
@@ -19,14 +20,19 @@ const values = {
 vi.mock("@getpaseo/plugin/client", () => ({
   useRpc: (rpc: { name: string }) => rpc.name === "clips.projects" ? state.projectRpc
     : rpc.name === "clips.board" ? state.boardRpc : rpc.name === "clips.collaboration.set" ? state.collaborationRpc
-      : rpc.name === "clips.role-model-defaults" ? state.roleDefaultsRpc : state.saveRoleDefaultsRpc,
+      : rpc.name === "clips.role-model-defaults" ? state.roleDefaultsRpc : rpc.name === "clips.role-model-defaults.save" ? state.saveRoleDefaultsRpc
+        : rpc.name === "clips.model-routing-policy" ? state.routingPolicyRpc : state.saveRoutingPolicyRpc,
+  usePaseo: () => ({ providers: { snapshot: async () => ({ entries: [{ provider: "codex", label: "Codex", status: "ready", enabled: true,
+    models: [{ id: "model", isSelectable: true, thinkingOptions: [{ id: "high" }] }] }] }) } }),
   useSettings: () => ({ status: "ready", values, revision: "r3", saving: false, saveError: null, save: state.settingsSave }),
 }));
 vi.mock("@getpaseo/plugin/client/ui", async () => {
   const { createElement: h } = await import("react");
   return {
     SettingsSection: ({ title, children }: any) => h("section", { "aria-label": title }, children),
-    SettingsCard: ({ children }: any) => h("div", {}, children),
+     SettingsCard: ({ children }: any) => h("div", {}, children),
+     SettingsInput: ({ label, initialValue, placeholder, onChangeText }: any) => h("label", {}, label,
+       h("input", { "aria-label": label, defaultValue: initialValue, placeholder, onInput: (event: any) => onChangeText(event.currentTarget.value) })),
     SettingsAction: ({ label, hint, actionLabel, disabled, onPress }: any) => h("div", {},
       h("span", {}, label), h("span", {}, hint), h("button", { "aria-label": actionLabel, disabled, onClick: onPress }, actionLabel)),
     SettingsSelect: ({ label, value, options, onValueChange }: any) => h("label", {}, label,
@@ -37,7 +43,7 @@ vi.mock("@getpaseo/plugin/client/ui", async () => {
 vi.mock("react-native", async () => {
   const { createElement: h } = await import("react");
   return {
-    View: ({ children, accessibilityLabel }: any) => h("div", { "aria-label": accessibilityLabel }, children),
+     View: ({ children, accessibilityLabel, style }: any) => h("div", { "aria-label": accessibilityLabel, style }, children),
     Text: ({ children }: any) => h("span", {}, children),
     Pressable: ({ children, accessibilityRole, onPress }: any) => h("button", { role: accessibilityRole, onClick: onPress }, children),
     ActivityIndicator: () => h("span", {}, "Loading"),
@@ -76,6 +82,11 @@ vi.mock("@tanstack/react-query", async () => {
       } } };
       if (queryKey[0] === "clips.role-defaults") return { data: { role: queryKey[1], model: "model", agent: "codex/model",
         reasoningEffort: "high", source: "user" }, refetch: vi.fn() };
+      if (queryKey[0] === "clips.role-defaults.providers" || queryKey[0] === "clips.routing.providers") return { data: [
+        { provider: "codex", label: "Codex", status: "ready", enabled: true, models: [{ id: "model" }] },
+      ] };
+      if (queryKey[0] === "clips.model-routing-policy") return { data: { version: 1, providerOrder: [], modelOrder: { manager: [], dev: [] },
+        reasoningEffortOrder: ["low", "medium", "high"], warningThresholds: [80, 90], handoffThreshold: 95 }, refetch: vi.fn() };
       return { isLoading: false };
     },
     useQueryClient: () => ({ invalidateQueries: vi.fn(), setQueryData: (...args: any[]) => state.cache.push(args) }),
@@ -107,6 +118,8 @@ beforeEach(() => {
   state.collaborationRpc.mockResolvedValue({});
   state.roleDefaultsRpc.mockResolvedValue({});
   state.saveRoleDefaultsRpc.mockResolvedValue({});
+  state.routingPolicyRpc.mockResolvedValue({});
+  state.saveRoutingPolicyRpc.mockResolvedValue({});
   state.settingsSave.mockResolvedValue(true);
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
@@ -125,20 +138,31 @@ const select = async (label: string, value: string) => act(async () => {
 });
 
 describe("Settings subviews", () => {
-  it("keeps a pristine Lane Manager role form disabled", async () => {
+  it("allows copying a legacy/global role value into the selected provider slot", async () => {
     await render(); await act(async () => { button("Lane Manager").click(); }); await render();
-    expect(button("Save role defaults").disabled).toBe(true);
+    expect(button("Save provider defaults").disabled).toBe(false);
+    await act(async () => { button("Save provider defaults").click(); });
+    expect(state.saveRoleDefaultsRpc).toHaveBeenCalledWith({ role: "manager", provider: "codex", model: "model", reasoningEffort: "high" });
   });
 
   it("saves explicit Automatic, empty feature values, and full access instead of falling back to untouched values", async () => {
     await render(); await act(async () => { button("Lane Manager").click(); }); await render();
     await select("Paseo agent", ""); await select("Thinking", ""); await select("Permission mode", "full-access");
     await act(async () => { button("Clear features").click(); });
-    await act(async () => { button("Save role defaults").click(); });
+    await act(async () => { button("Save provider defaults").click(); });
     expect(state.settingsSave).toHaveBeenCalledWith(expect.objectContaining({ roles: expect.objectContaining({
       manager: expect.objectContaining({ legacyModelMigrated: true, featureValues: {}, modeId: "full-access" }),
     }) }), "r3");
-    expect(state.saveRoleDefaultsRpc).toHaveBeenCalledWith({ role: "manager", model: "", reasoningEffort: "" });
+    expect(state.saveRoleDefaultsRpc).toHaveBeenCalledWith({ role: "manager", provider: "codex", model: "", reasoningEffort: "" });
+  });
+
+  it("renders padded settings content and exposes the ordered routing policy editor", async () => {
+    await render();
+    await act(async () => { button("Routing").click(); }); await render();
+    expect(container.textContent).toContain("Provider-specific role defaults are configured");
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Usage warning thresholds (%)"]')?.placeholder).toBe("80, 90");
+    const padded = Array.from(container.querySelectorAll("div")).find((item) => item.style.padding === "16px");
+    expect(padded).toBeTruthy();
   });
 
   it("keeps an in-flight collaboration result scoped to the project that initiated it", async () => {

@@ -93,6 +93,23 @@ describe('Lane worker limit CLI', () => {
     expect(JSON.parse(fs.readFileSync(userConfig, 'utf8'))).toEqual({});
   });
 
+  it('supports provider-scoped model defaults and durable routing policy JSON', () => {
+    const cwd = workspace({ git: false });
+    const userConfig = path.join(cwd, 'home', 'lanes.config.json');
+    expect(run(cwd, '--user', '--provider', 'claude', 'lane_dev_model', 'claude-model').status).toBe(0);
+    expect(run(cwd, '--user', '--provider', 'claude', 'lane_dev_model').stdout).toBe('claude-model\n');
+    expect(run(cwd, '--user', '--provider', 'codex', 'lane_dev_model').stdout).toBe('(not set)\n');
+    const policy = JSON.stringify({ version: 1, providerOrder: ['codex', 'opencode'], modelOrder: { manager: [], dev: [] },
+      reasoningEffortOrder: ['low', 'medium', 'high'], warningThresholds: [80, 90], handoffThreshold: 95 });
+    expect(run(cwd, '--user', 'model_routing_policy', policy).status).toBe(0);
+    expect(JSON.parse(run(cwd, '--user', 'model_routing_policy').stdout)).toEqual(JSON.parse(policy));
+    expect(JSON.parse(fs.readFileSync(userConfig, 'utf8'))).toMatchObject({
+      provider_model_preferences: { claude: { lane_dev_model: 'claude-model' } },
+      model_routing_policy: JSON.parse(policy),
+    });
+    expect(run(cwd, '--user', '--provider', 'claude', 'lane_dev_model', '--unset').status).toBe(0);
+  });
+
   it('applies project > user > built-in defaults and removes overrides without pinning defaults', () => {
     const cwd = workspace();
     const userConfig = path.join(cwd, 'home', 'lanes.config.json');

@@ -30,13 +30,14 @@ type ProviderFeature = {
 };
 
 export function AgentConfigFields({
-  theme, hostId, projectId, agent, thinkingOptionId, featureValues, onAgentChange,
+  theme, hostId, projectId, agent, providerId, thinkingOptionId, featureValues, onAgentChange,
   onThinkingChange, onFeatureValuesChange, modeId, onModeChange, allowAutomatic, modelHint,
 }: {
   theme: Theme;
   hostId: string;
   projectId?: string;
   agent: string;
+  providerId?: string;
   thinkingOptionId: string;
   featureValues: Record<string, FeatureValue>;
   onAgentChange: (value: string) => void;
@@ -55,14 +56,15 @@ export function AgentConfigFields({
   });
   const entries = catalog.data ?? [];
   const modelOptions = entries
-    .filter((entry) => entry.status === "ready" && entry.enabled !== false)
+    .filter((entry) => entry.status === "ready" && entry.enabled !== false && (!providerId || entry.provider === providerId))
     .flatMap((entry) => (entry.models ?? [])
       .filter((model) => model.isSelectable !== false)
       .map((model) => ({
-        value: `${entry.provider}/${model.id}`,
+        value: providerId ? model.id : `${entry.provider}/${model.id}`,
         label: `${entry.label ?? entry.provider} · ${model.label ?? model.id}`,
       })));
-  const effectiveAgent = agent || defaultProvider(entries);
+  const scopedAgent = providerId && agent.startsWith(`${providerId}/`) ? agent.slice(providerId.length + 1) : agent;
+  const effectiveAgent = providerId || agent || defaultProvider(entries);
   const activeThinking = thinkingOptionId || "";
   const optionsQuery = useQuery({
     queryKey: ["clips-agent-options", hostId, projectId ?? "default", effectiveAgent, activeThinking],
@@ -111,8 +113,9 @@ export function AgentConfigFields({
     ...(allowAutomatic ? [{ value: "", label: "Automatic" }] : []),
     ...modelOptions,
   ];
-  if (agent && !modelOptions.some((option) => option.value === agent)) {
-    selectOptions.push({ value: agent, label: `${agent} (currently unavailable)` });
+  const selectedModel = providerId ? scopedAgent : agent;
+  if (selectedModel && !modelOptions.some((option) => option.value === selectedModel)) {
+    selectOptions.push({ value: selectedModel, label: `${selectedModel} (currently unavailable)` });
   }
   const defaultThinking = options?.defaultThinkingOptionId ?? "";
   const selectedSpeed = speedFeature
@@ -123,12 +126,12 @@ export function AgentConfigFields({
   return (
     <View style={{ gap: 10 }}>
       <SettingsSelect
-        label="Paseo agent"
-        hint={modelHint ?? "Provider and model used for this launch."}
-        value={agent}
-        options={selectOptions}
-        onValueChange={(value) => {
-          onAgentChange(value);
+         label={providerId ? "Default model" : "Paseo agent"}
+         hint={modelHint ?? (providerId ? `Model saved for ${providerId}.` : "Provider and model used for this launch.")}
+         value={selectedModel}
+         options={selectOptions}
+         onValueChange={(value) => {
+           onAgentChange(providerId && value ? `${providerId}/${value}` : value);
           onThinkingChange("");
           onFeatureValuesChange({});
           onModeChange(FULL_ACCESS_MODE);

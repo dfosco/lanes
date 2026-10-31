@@ -1,8 +1,8 @@
 // Config command - view and edit lanes configuration
 import {
   readConfig, getConfigValue, setConfigValue, DEFAULT_CONFIG, getConfigPath,
-  getModelPreference, getUserModelPreference, MODEL_PREFERENCE_KEYS,
-  setModelPreference, unsetModelPreference,
+  getModelPreference, getUserModelPreference, MODEL_PREFERENCE_KEYS, MODEL_ROUTING_POLICY_KEY,
+  getModelRoutingPolicy, setModelRoutingPolicy, setModelPreference, unsetModelPreference,
 } from '../lib/config.js';
 import { getRepoRoot } from '../lib/core.js';
 import { effectiveProjectId, registerProject } from '../lib/registry.js';
@@ -11,7 +11,7 @@ import fs from 'fs';
 export function runConfigCommand(args) {
   const [key, value] = args;
   if (args.length === 1 && (key === '--help' || key === '-h')) return showHelp();
-  if (key === '--user') return runUserConfigCommand(args.slice(1));
+  if (args.includes('--user') || args.includes('--provider')) return runScopedModelConfig(args);
   if (args.length > 2) throw new Error('Usage: lanes config <key> [value] or --lane-max-active-agents <N>');
   if (key === '--lane-max-active-agents') {
     if (args.length !== 2) throw new Error('--lane-max-active-agents requires a positive integer');
@@ -39,21 +39,47 @@ export function runConfigCommand(args) {
   return setConfig(key, value);
 }
 
-function runUserConfigCommand(args) {
-  if (args.length < 1 || args.length > 2) {
-    throw new Error('Usage: lanes config --user <model-key> [value|--unset]');
+function runScopedModelConfig(args) {
+  let scope = 'project';
+  let provider;
+  const positional = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--user') { scope = 'user'; continue; }
+    if (args[i] === '--provider') {
+      provider = args[++i];
+      if (!provider) throw new Error('--provider requires a provider ID from the host catalog');
+      continue;
+    }
+    positional.push(args[i]);
   }
-  const [key, value] = args;
-  if (!MODEL_PREFERENCE_KEYS.includes(key)) {
-    throw new Error(`User scope supports only model preferences: ${MODEL_PREFERENCE_KEYS.join(', ')}`);
+  if (positional.length < 1 || positional.length > 2) {
+    throw new Error('Usage: lanes config [--user] [--provider <provider-id>] <model-key|model_routing_policy> [value|--unset]');
   }
-  if (args.length === 1) {
-    const preference = getUserModelPreference(key);
-    console.log(preference ?? '(not set)');
+  const [key, value] = positional;
+  if (key === MODEL_ROUTING_POLICY_KEY) {
+    if (provider) throw new Error('model_routing_policy is shared across providers; configure providerOrder inside the policy');
+    if (value === undefined) {
+      console.log(JSON.stringify(getModelRoutingPolicy(scope === 'user' ? undefined : getRepoRoot(), { scope: scope === 'user' ? 'user' : undefined }), null, 2));
+      return;
+    }
+    if (value === '--unset') throw new Error('Clearing model_routing_policy is not supported; set an explicit validated version 1 policy');
+    let parsed;
+    try { parsed = JSON.parse(value); } catch { throw new Error('model_routing_policy must be valid JSON'); }
+    const saved = setModelRoutingPolicy(parsed, { scope, repoRoot: scope === 'project' ? getRepoRoot() : undefined });
+    console.log(JSON.stringify(saved, null, 2));
     return;
   }
-  if (value === '--unset') return unsetPreference(key, 'user');
-  return setPreference(key, value, 'user');
+  if (!MODEL_PREFERENCE_KEYS.includes(key)) throw new Error(`Unknown model preference: ${key}`);
+  if (scope === 'user' && value === undefined) {
+    console.log(getUserModelPreference(key, { provider }) ?? '(not set)');
+    return;
+  }
+  if (value === undefined) {
+    console.log(getModelPreference(key, getRepoRoot(), { provider }));
+    return;
+  }
+  if (value === '--unset') return unsetPreference(key, scope, provider);
+  return setPreference(key, value, scope, provider);
 }
 
 function showAllConfig() {
@@ -94,9 +120,13 @@ function showHelp() {
   lanes config <model-key> --unset         Remove a project model override
   lanes config --user <model-key> [value]  Read or set a user model preference
   lanes config --user <model-key> --unset  Remove a user model override
+  lanes config [--user] --provider <id> <model-key> [value|--unset]
+                                           Read or set provider-scoped defaults
+  lanes config [--user] model_routing_policy [<JSON>]
+                                           Read or set routing and usage thresholds
   lanes config --lane-max-active-agents <N>  Set the per-Lane resource fallback
 
-Model preferences resolve project > user > built-in. Built-in values are
+Provider preferences resolve project provider > project global > user provider > user global > built-in. Built-in values are
 gpt-6.1-sol/high for Lane Managers and gpt-6-luna/high for Lane Devs.
 The --user forms work outside a Git repository. Reading a model key without
 --user returns its effective value; a user-scoped read shows only that override.
@@ -136,6 +166,11 @@ value does not itself terminate workers. Cloud execution does not bypass it.`);
 
 function showConfigKey(key) {
   const repoRoot = getRepoRoot();
+
+  if (key === MODEL_ROUTING_POLICY_KEY) {
+    console.log(JSON.stringify(getModelRoutingPolicy(repoRoot), null, 2));
+    return;
+  }
   
   if (MODEL_PREFERENCE_KEYS.includes(key)) {
     console.log(getModelPreference(key, repoRoot));
@@ -151,21 +186,21 @@ function showConfigKey(key) {
   console.log(key === 'project_id' ? effectiveProjectId(repoRoot) : getConfigValue(key, repoRoot));
 }
 
-function setPreference(key, value, scope) {
+function setPreference(key, value, scope, provider) {
   try {
-    const options = scope === 'user' ? { scope } : { scope, repoRoot: getRepoRoot() };
+    const options = { scope, provider, ...(scope === 'user' ? {} : { repoRoot: getRepoRoot() }) };
     const preference = setModelPreference(key, value, options);
-    console.log(`✅ Set ${scope} ${key} = ${preference}`);
+    console.log(`✅ Set ${scope}${provider ? ` ${provider}` : ''} ${key} = ${preference}`);
   } catch (error) {
     throw new Error(error.message, { cause: error });
   }
 }
 
-function unsetPreference(key, scope) {
+function unsetPreference(key, scope, provider) {
   try {
-    const options = scope === 'user' ? { scope } : { scope, repoRoot: getRepoRoot() };
+    const options = { scope, provider, ...(scope === 'user' ? {} : { repoRoot: getRepoRoot() }) };
     unsetModelPreference(key, options);
-    console.log(`✅ Removed ${scope} override for ${key}`);
+    console.log(`✅ Removed ${scope}${provider ? ` ${provider}` : ''} override for ${key}`);
   } catch (error) {
     throw new Error(error.message, { cause: error });
   }

@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  getConfigPath, getConfigValue, getModelPreference, getUserModelPreference, initConfig,
-  readConfig, setConfigValue, setModelPreference, unsetModelPreference, writeConfig,
+  getConfigPath, getConfigValue, getModelPreference, getUserModelPreference, getModelRoutingPolicy, initConfig,
+  readConfig, setConfigValue, setModelPreference, setModelRoutingPolicy, unsetModelPreference, writeConfig,
 } from './config.js';
 
 const roots = [];
@@ -140,6 +140,42 @@ describe('Lane worker configuration', () => {
       expect(stored).not.toHaveProperty('lane_manager_reasoning_effort');
       expect(stored).not.toHaveProperty('lane_dev_model');
       expect(stored).not.toHaveProperty('lane_dev_reasoning_effort');
+    });
+
+    it('isolates provider defaults while preserving the documented project/user precedence', () => {
+      const { root } = workspace(null);
+      const userStore = path.join(root, 'user-store');
+      vi.stubEnv('HOME', root);
+      vi.stubEnv('LANES_HOME', userStore);
+      vi.stubEnv('CLIPS_HOME', '');
+      setModelPreference('lane_dev_model', 'claude-dev', { scope: 'user', provider: 'claude' });
+      setModelPreference('lane_dev_model', 'global-dev', { scope: 'user' });
+      expect(getModelPreference('lane_dev_model', root, { provider: 'claude' })).toBe('claude-dev');
+      expect(getModelPreference('lane_dev_model', root, { provider: 'codex' })).toBe('global-dev');
+      setModelPreference('lane_dev_model', 'project-global', { repoRoot: root });
+      expect(getModelPreference('lane_dev_model', root, { provider: 'claude' })).toBe('project-global');
+      setModelPreference('lane_dev_model', 'project-claude', { repoRoot: root, provider: 'claude' });
+      expect(getModelPreference('lane_dev_model', root, { provider: 'claude' })).toBe('project-claude');
+      expect(getModelPreference('lane_dev_model', root, { provider: 'codex' })).toBe('project-global');
+      unsetModelPreference('lane_dev_model', { scope: 'project', repoRoot: root, provider: 'claude' });
+      expect(getModelPreference('lane_dev_model', root, { provider: 'claude' })).toBe('project-global');
+      expect(getUserModelPreference('lane_dev_model', { provider: 'claude' })).toBe('claude-dev');
+    });
+
+    it('validates and persists the user routing policy without clobbering preferences', () => {
+      const { root } = workspace(null);
+      const userStore = path.join(root, 'user-store');
+      vi.stubEnv('HOME', root);
+      vi.stubEnv('LANES_HOME', userStore);
+      vi.stubEnv('CLIPS_HOME', '');
+      setModelPreference('lane_dev_model', 'gpt-6-luna', { scope: 'user', provider: 'codex' });
+      const policy = { version: 1, providerOrder: ['codex', 'opencode'], modelOrder: { manager: [], dev: [] },
+        reasoningEffortOrder: ['low', 'medium', 'high'], warningThresholds: [80, 90], handoffThreshold: 95 };
+      expect(setModelRoutingPolicy(policy, { scope: 'user' })).toEqual(policy);
+      expect(getModelRoutingPolicy(root)).toEqual(policy);
+      expect(getModelRoutingPolicy(root, { scope: 'user' })).toEqual(policy);
+      expect(getUserModelPreference('lane_dev_model', { provider: 'codex' })).toBe('gpt-6-luna');
+      expect(() => setModelRoutingPolicy({ ...policy, providerOrder: ['codex', 'codex'] }, { scope: 'user' })).toThrow(/unique/);
     });
 
     it('rejects invalid values and malformed stored data without overwriting it', () => {

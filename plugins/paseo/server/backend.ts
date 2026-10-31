@@ -12,7 +12,7 @@ import {
   reviewDetail, reviewListData, reviewOpenResult, reviewOpenData, preferences as preferencesSchema,
   type AttachmentReadData, type LabelChange, type AgentConfiguration, type Goal, type Lane,
   type LaneClosureData, type Project, type Task, type Work, type Preferences, type StartMode,
-  type AgentRole, type ReviewCandidate, type RoleModelDefaults,
+  type AgentRole, type ReviewCandidate, type RoleModelDefaults, type ModelRoutingPolicy,
 } from "../shared/contracts";
 import {
   FULL_ACCESS_MODE, resolvePermissionMode, type ProviderPermissionMode,
@@ -21,6 +21,7 @@ import {
   branchName, branchPrefix, defaultProvider, executionFor, isActiveAgent, matchesWorkspace,
   promptFor, workspaceTitle, type AgentInfo, type WorkspaceInfo,
 } from "../shared/work";
+import { orderedRoleRoutes } from "../shared/model-routing";
 
 type Paseo = PluginHandlerContext["paseo"];
 type LocalProject = Project & { root: string; configPath: string };
@@ -252,16 +253,19 @@ const rolePreferenceKeys = (role: AgentRole) => ({
   reasoningEffort: `lane_${role === "manager" ? "manager" : "dev"}_reasoning_effort`,
 });
 
-async function userPreference(paseo: Paseo, key: string): Promise<string | null> {
+async function userPreference(paseo: Paseo, key: string, provider?: string): Promise<string | null> {
   const cli = await findClips(paseo);
-  const { stdout } = await command(cli.bin, [...cli.prefix, "config", "--user", key]);
+  const { stdout } = await command(cli.bin, [...cli.prefix, "config", "--user", ...(provider ? ["--provider", provider] : []), key]);
   const value = stdout.trim();
   return value && value !== "(not set)" ? value : null;
 }
 
-function projectPreference(project: LocalProject, key: string): string | null {
+function projectPreference(project: LocalProject, key: string, provider?: string): string | null {
   try {
     const config = JSON.parse(fs.readFileSync(project.configPath, "utf8"));
+    if (provider && typeof config?.provider_model_preferences?.[provider]?.[key] === "string") {
+      return config.provider_model_preferences[provider][key].trim() || null;
+    }
     return typeof config?.[key] === "string" && config[key].trim() ? config[key].trim() : null;
   } catch { return null; }
 }
@@ -271,7 +275,9 @@ async function modelAgent(paseo: Paseo, model: string, preferredProvider = ""): 
   const matches = entries.filter((entry) => entry.status === "ready" && entry.enabled !== false)
     .flatMap((entry) => (entry.models ?? []).filter((item) => item.id === model && item.isSelectable !== false)
       .map(() => `${entry.provider}/${model}`));
-  return matches.find((value) => value.startsWith(`${preferredProvider}/`)) ?? matches[0];
+  return preferredProvider
+    ? matches.find((value) => value.startsWith(`${preferredProvider}/`))
+    : matches[0];
 }
 
 function legacyModelId(agent: string): string {
@@ -284,21 +290,21 @@ export async function readRoleModelDefaults(
   paseo: Paseo,
   role: AgentRole,
   legacy: Pick<Preferences, "agent" | "thinkingOptionId"> = { agent: "", thinkingOptionId: "" },
-  options: { projectId?: string; legacyDisabled?: boolean } = {},
+  options: { projectId?: string; legacyDisabled?: boolean; provider?: string } = {},
 ): Promise<RoleModelDefaults> {
   const keys = rolePreferenceKeys(role);
   const [userModel, userEffort] = await Promise.all([
-    userPreference(paseo, keys.model), userPreference(paseo, keys.reasoningEffort),
+    userPreference(paseo, keys.model, options.provider), userPreference(paseo, keys.reasoningEffort, options.provider),
   ]);
   const project = options.projectId ? await findProject(paseo, options.projectId) : null;
-  const projectModel = project ? projectPreference(project, keys.model) : null;
-  const projectEffort = project ? projectPreference(project, keys.reasoningEffort) : null;
+  const projectModel = project ? projectPreference(project, keys.model, options.provider) : null;
+  const projectEffort = project ? projectPreference(project, keys.reasoningEffort, options.provider) : null;
   const source = projectModel || projectEffort ? "project" : userModel || userEffort ? "user" : null;
   if (source) {
     const model = projectModel ?? userModel ?? DEFAULT_ROLE_MODEL[role];
     const reasoningEffort = projectEffort ?? userEffort ?? DEFAULT_ROLE_EFFORT;
     return { role, model: model ?? DEFAULT_ROLE_MODEL[role], reasoningEffort: reasoningEffort ?? DEFAULT_ROLE_EFFORT,
-      source, agent: await modelAgent(paseo, model ?? DEFAULT_ROLE_MODEL[role]) };
+      source, agent: await modelAgent(paseo, model ?? DEFAULT_ROLE_MODEL[role], options.provider) };
   }
   if (!options.legacyDisabled && legacy.agent) {
     return {
@@ -310,18 +316,18 @@ export async function readRoleModelDefaults(
     };
   }
   return { role, model: DEFAULT_ROLE_MODEL[role], reasoningEffort: DEFAULT_ROLE_EFFORT, source: "built_in",
-    agent: await modelAgent(paseo, DEFAULT_ROLE_MODEL[role]) };
+    agent: await modelAgent(paseo, DEFAULT_ROLE_MODEL[role], options.provider) };
 }
 
 export async function saveRoleModelDefaults(
   paseo: Paseo,
-  input: { role: AgentRole; model: string; reasoningEffort: string },
+  input: { role: AgentRole; provider: string; model: string; reasoningEffort: string },
 ): Promise<RoleModelDefaults> {
   const model = input.model.trim();
   const reasoningEffort = input.reasoningEffort.trim();
   if (model) {
     const catalog = (await paseo.providers.snapshot({ cwd: os.homedir() })).entries;
-    const available = catalog.some((entry) => entry.status === "ready" && entry.enabled !== false &&
+    const available = catalog.some((entry) => entry.provider === input.provider && entry.status === "ready" && entry.enabled !== false &&
       entry.models?.some((candidate) => candidate.id === model && candidate.isSelectable !== false &&
         (!reasoningEffort || candidate.thinkingOptions?.some((option) => option.id === reasoningEffort))));
     if (!available) throw new Error(`Model ${model} or reasoning effort ${reasoningEffort} is unavailable from ready Paseo providers.`);
@@ -329,7 +335,7 @@ export async function saveRoleModelDefaults(
   const cli = await findClips(paseo);
   const keys = rolePreferenceKeys(input.role);
   const write = async (key: string, value: string) => command(cli.bin, [
-    ...cli.prefix, "config", "--user", key, ...(value ? [value] : ["--unset"]),
+    ...cli.prefix, "config", "--user", "--provider", input.provider, key, ...(value ? [value] : ["--unset"]),
   ]);
   const completed: string[] = [];
   try {
@@ -345,9 +351,38 @@ export async function saveRoleModelDefaults(
     role: input.role,
     model: model || DEFAULT_ROLE_MODEL[input.role],
     reasoningEffort: reasoningEffort || DEFAULT_ROLE_EFFORT,
-    agent: model ? await modelAgent(paseo, model) : undefined,
+    agent: model ? await modelAgent(paseo, model, input.provider) : undefined,
     source: model || reasoningEffort ? "user" : "built_in",
   };
+}
+
+export async function readModelRoutingPolicy(paseo: Paseo): Promise<ModelRoutingPolicy> {
+  const cli = await findClips(paseo);
+  const { stdout } = await command(cli.bin, [...cli.prefix, "config", "--user", "model_routing_policy"]);
+  return JSON.parse(stdout) as ModelRoutingPolicy;
+}
+
+export async function saveModelRoutingPolicy(paseo: Paseo, input: ModelRoutingPolicy): Promise<ModelRoutingPolicy> {
+  const catalog = (await paseo.providers.snapshot({ cwd: os.homedir() })).entries;
+  const known = new Set(catalog.map((entry) => entry.provider));
+  const unknown = input.providerOrder.filter((provider) => !known.has(provider));
+  if (unknown.length) throw new Error(`Unknown Paseo provider IDs in fallback order: ${unknown.join(", ")}`);
+  for (const [role, choices] of Object.entries(input.modelOrder)) {
+    for (const choice of choices) {
+      const slash = choice.indexOf("/");
+      const provider = choice.slice(0, slash);
+      const modelId = choice.slice(slash + 1);
+      const entry = catalog.find((candidate) => candidate.provider === provider && candidate.status === "ready" && candidate.enabled !== false);
+      if (!entry?.models?.some((candidate) => candidate.id === modelId && candidate.isSelectable !== false)) {
+        throw new Error(`Model order for ${role} includes unavailable provider/model ${choice}.`);
+      }
+    }
+  }
+  const cli = await findClips(paseo);
+  const { stdout } = await command(cli.bin, [
+    ...cli.prefix, "config", "--user", "model_routing_policy", JSON.stringify(input),
+  ]);
+  return JSON.parse(stdout) as ModelRoutingPolicy;
 }
 
 export async function readProjectReviews(paseo: Paseo, projectId: string) {
@@ -657,9 +692,41 @@ async function agentConfiguration(
 ) {
   const preferences = preferencesSchema.schema.parse(preferencesInput);
   const rolePreferences = preferences.roles[role];
-  const roleDefaults = override ? null : await readRoleModelDefaults(paseo, role, preferences, {
-    projectId, legacyDisabled: rolePreferences.legacyModelMigrated,
-  });
+  let roleDefaults: RoleModelDefaults | null = null;
+  if (!override) {
+    const policy = await readModelRoutingPolicy(paseo);
+    for (const route of orderedRoleRoutes(policy, role)) {
+      const provider = route.provider;
+      for (const modelId of route.models) {
+        const agent = await modelAgent(paseo, modelId, provider);
+        if (!agent) continue;
+        const defaults = await readRoleModelDefaults(paseo, role, preferences, {
+          provider, projectId, legacyDisabled: rolePreferences.legacyModelMigrated,
+        });
+        const entries = (await paseo.providers.snapshot({ cwd: root })).entries;
+        const model = entries.find((entry) => entry.provider === provider)?.models?.find((candidate) => candidate.id === modelId);
+        const availableEfforts = model?.thinkingOptions?.map((option) => option.id) ?? [];
+        const configuredIndex = policy.reasoningEffortOrder.indexOf(defaults.reasoningEffort);
+        const orderedEffort = configuredIndex < 0 ? undefined : availableEfforts.filter((effortId) =>
+          policy.reasoningEffortOrder.includes(effortId))
+          .sort((left, right) => Math.abs(policy.reasoningEffortOrder.indexOf(left) - configuredIndex) -
+            Math.abs(policy.reasoningEffortOrder.indexOf(right) - configuredIndex))[0];
+        const effort = defaults.reasoningEffort && availableEfforts.includes(defaults.reasoningEffort)
+          ? defaults.reasoningEffort
+          : orderedEffort ?? model?.defaultThinkingOptionId ?? "";
+        roleDefaults = { ...defaults, model: modelId, reasoningEffort: effort, agent };
+        break;
+      }
+      if (roleDefaults) break;
+      const candidate = await readRoleModelDefaults(paseo, role, preferences, {
+        provider, projectId, legacyDisabled: rolePreferences.legacyModelMigrated,
+      });
+      if (candidate.agent) { roleDefaults = candidate; break; }
+    }
+    roleDefaults ??= await readRoleModelDefaults(paseo, role, preferences, {
+      projectId, legacyDisabled: rolePreferences.legacyModelMigrated,
+    });
+  }
   if (roleDefaults && !roleDefaults.agent) {
     throw new Error(`The ${roleDefaults.source} ${role} model ${roleDefaults.model} is not currently available from Paseo providers.`);
   }
