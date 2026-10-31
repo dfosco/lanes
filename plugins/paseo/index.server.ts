@@ -5,6 +5,12 @@ import { resourceManagerPreferences, resourceManagerStatusRpc } from "./shared/r
 import { resourceChannelRpc, resourceFoldRpc, resourceHandoffRpc } from "./shared/resource-channel";
 import { createResourceFolding } from "./server/resource-folding";
 import {
+  laneEnvironmentAssignManagerRpc, laneEnvironmentContinueRpc, laneEnvironmentPreferences, laneEnvironmentStatusRpc,
+  type LaneEnvironmentSettings,
+} from "./shared/lane-environment";
+import { createLaneEnvironment } from "./server/lane-environment";
+import { createLaneEnvironmentStore, laneEnvironmentStateFile } from "./server/lane-environment-store";
+import {
   agentOptionsRpc, attachmentReadRpc, boardRpc, collaborationRpc, labelUsesRpc, labelsRpc,
   roleModelDefaultsRpc, saveRoleModelDefaultsRpc, reviewListRpc, reviewOpenRpc, reviewShowRpc, reviewDecideRpc, reviewImportRpc,
   closeRpc, preferences, projectsRpc, startRpc,
@@ -25,10 +31,24 @@ export default function contribute(server: PluginServerContext) {
   } });
   const folding = createResourceFolding({ target: (id) => resources.target(id), critical: () => resources.critical() });
   const unsubscribeSettings = resourceSettings.subscribe(() => resources.settingsChanged());
+  const environmentSettings = server.registerSettings(laneEnvironmentPreferences);
+  const laneEnvironment = createLaneEnvironment({
+    store: createLaneEnvironmentStore(laneEnvironmentStateFile()),
+    // Invalid saved preferences fail closed: no activation and no manager claim until they are fixed.
+    settings: async (): Promise<LaneEnvironmentSettings> => {
+      const state = await environmentSettings.read();
+      if (state.status !== "ready") throw new Error(`Lanes environment settings are invalid: ${state.error}`);
+      return state.values;
+    },
+  });
   // SDK 0.11.2 first supplies its subprocess-owned API through a hook or RPC.
   // Sampling starts immediately; notification discovery waits for that context.
   const releases = [
     server.before("agent.session_open", (_input, { paseo }) => { resources.bind(paseo); }),
+    // Lanes environment: create-before may claim the first manager; after-hooks only confirm or observe.
+    server.before("agent.create", async ({ request }, { paseo }) => laneEnvironment.beforeAgentCreate(request, paseo)),
+    server.on("agent.created", (event) => laneEnvironment.onAgentCreated(event.agent)),
+    server.on("workspace.created", (event) => laneEnvironment.onWorkspaceCreated(event.workspace)),
     ...(["agent.created", "agent.closed", "agent.turn_started", "agent.turn_ended", "agent.permission_requested",
       "agent.permission_resolved", "agent.archived", "workspace.created", "workspace.archived"] as const)
       .map((event) => server.on(event, (payload, { paseo }) => {
@@ -40,6 +60,9 @@ export default function contribute(server: PluginServerContext) {
     resources.bind(context.paseo);
     return handler(input, context);
   });
+  handle(laneEnvironmentStatusRpc, (input) => laneEnvironment.status(input.workspaceId));
+  handle(laneEnvironmentAssignManagerRpc, (input, { paseo }) => laneEnvironment.assignManager(paseo, input));
+  handle(laneEnvironmentContinueRpc, (input, { paseo }) => laneEnvironment.continueManager(paseo, input));
   handle(resourceManagerStatusRpc, () => resources.status());
   handle(resourceChannelRpc, async (input) => ({ ...await resources.channel(input), pendingHandoffs: folding.pending(input.managerId) }));
   handle(resourceHandoffRpc, (input, { paseo }) => folding.handoff(paseo, input));

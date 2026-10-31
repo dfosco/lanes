@@ -40,7 +40,11 @@ describe("resource monitor plugin lifecycle", () => {
     cleanup();
     expect(mocked.dispose).toHaveBeenCalledTimes(1);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
-    expect(releases).toHaveLength(10);
+    // Three Lanes environment hooks (agent.create before, agent.created, workspace.created) join the resource hooks.
+    expect(releases).toHaveLength(13);
+    expect(handlers.has("clips.lane-environment.status")).toBe(true);
+    expect(handlers.has("clips.lane-environment.assign-manager")).toBe(true);
+    expect(handlers.has("clips.lane-environment.continue")).toBe(true);
     for (const release of releases) expect(release).toHaveBeenCalledTimes(1);
   });
 });
