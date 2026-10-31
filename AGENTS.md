@@ -10,6 +10,21 @@
 | **lane-radar** | `.agents/skills/lane-radar/SKILL.md` | On-demand external intake, PR preparation and proposed routing, without delegation or continued delivery. |
 | **lane-plugin** | `.agents/skills/lane-plugin/SKILL.md` | Install, update and verify the Paseo plugin or local Copilot App canvas using host-specific procedures. |
 
+## Paseo plugin settings changes
+
+After any change to the Paseo plugin settings UI, menu labels, defaults, or
+settings behavior, run the relevant tests and typecheck, then reload the installed
+plugin so the app reflects the change. This is standing user authorization for
+that reload during settings work; do not leave the user viewing an old runtime.
+Inspect `paseo plugin ls --json` first to confirm the actual plugin ID, host, and
+source checkout, then run `paseo plugin reload <installed-id>` (currently `lanes`).
+Verify the plugin returns to `running` and inspect its logs for startup errors.
+Coordinate with other active editors before reloading a shared checkout. A reload
+does not install dependencies or update a different source checkout: report that
+blocker rather than silently switching installations or discarding changes.
+Explicit user instructions to defer a reload take precedence. Distinguish a
+successful runtime reload from visual verification of the settings screen.
+
 ## Work model
 
 Lane Manager starts or resumes by reading `lanes lane manager list --all --json`
