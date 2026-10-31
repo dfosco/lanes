@@ -132,8 +132,11 @@ export const laneEnvironmentAssignManagerRpc = defineRpc({
   output: z.object({
     storeRevision: z.number().int().nonnegative(),
     workspace: laneEnvironmentWorkspaceView,
-    /** The assigned manager title is not changed by this operation; its advisory title is reported separately. */
-    titleApplied: z.literal(false),
+    assignmentApplied: z.boolean(),
+    assignmentError: z.string().nullable(),
+    /** Null means the requested title state could not be verified after a partial CLI failure. */
+    titleApplied: z.boolean().nullable(),
+    titleError: z.string().nullable(),
     advisoryTitle: z.string(),
     /** Null means there was no previous manager to rename. */
     formerManagerTitleApplied: z.boolean().nullable(),
@@ -158,7 +161,7 @@ export const laneEnvironmentContinueRpc = defineRpc({
     /** Native limits: the new session is not a fork, transcript clone or provider switch. */
     limitations: z.array(z.string()),
     demotionNotice: z.enum(["sent", "failed"]),
-    titleApplied: z.boolean(),
+    titleApplied: z.boolean().nullable(),
     titleError: z.string().nullable(),
     advisoryTitle: z.string(),
   }),

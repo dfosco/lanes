@@ -57,6 +57,41 @@ function fakePaseo(options: { workspaces?: Record<string, string>; agents?: Fake
   return { paseo: paseo as unknown as PaseoApi, creates, sent, agents };
 }
 
+function titleCli(agents: Map<string, FakeAgent>, options: { staleInspectAfterUpdate?: boolean; unavailable?: boolean; wrongCwd?: boolean; failUpdateId?: string } = {}) {
+  const calls: string[][] = [];
+  let staleInspect = false;
+  const run = async (args: readonly string[]) => {
+    const command = [...args];
+    calls.push(command);
+    if (options.unavailable) throw new Error("spawn paseo ENOENT");
+    if (command[0] === "ls" && command[1] === "--global") {
+      return JSON.stringify([...agents.values()].map((agent) => ({
+        id: agent.id, name: agent.title, cwd: options.wrongCwd && agent.id === "m1" ? "/repo/two" : agent.cwd,
+      })));
+    }
+    if (command[0] === "inspect") {
+      const agent = agents.get(command[1]);
+      if (!agent) throw new Error(`unknown agent ${command[1]}`);
+      let name = agent.title;
+      if (staleInspect && options.staleInspectAfterUpdate) {
+        staleInspect = false;
+        name = "🧭 Ship it";
+      }
+      return JSON.stringify({ Id: agent.id, Name: name, Cwd: options.wrongCwd && agent.id === "m1" ? "/repo/two" : agent.cwd });
+    }
+    if (command[0] === "agent" && command[1] === "update") {
+      const agent = agents.get(command[2]);
+      if (!agent) throw new Error(`unknown agent ${command[2]}`);
+      if (command[2] === options.failUpdateId) throw new Error(`update refused for ${command[2]}`);
+      agent.title = command[4];
+      if (options.staleInspectAfterUpdate && command[4]?.startsWith("[former Lane Manager]")) staleInspect = true;
+      return JSON.stringify({ Id: agent.id, Name: agent.title, Cwd: agent.cwd });
+    }
+    throw new Error(`unexpected Paseo CLI call: ${command.join(" ")}`);
+  };
+  return { run, calls };
+}
+
 describe("lane environment titles", () => {
   const settings = defaultLaneEnvironmentSettings();
 
@@ -279,17 +314,136 @@ describe("lane environment lifecycle", () => {
       { id: "a1", workspaceId: "ws1", cwd: "/repo/one", title: "🧭 Old", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: { provider: "claude" } },
       { id: "a2", workspaceId: "ws1", cwd: "/repo/one", title: "Working on login", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: { provider: "claude" } },
     ];
-    const { paseo } = fakePaseo({ agents });
-    const env = service();
+    const fake = fakePaseo({ agents });
+    const cli = titleCli(fake.agents);
+    const env = service({}, path.join(dir, "state.json"), cli.run);
     await env.onWorkspaceCreated({ id: "ws1" });
     await env.onAgentCreated({ id: "a1", workspaceId: "ws1", title: null });
-    await env.beforeAgentCreate(createRequest("/repo/one"), paseo);
+    await env.beforeAgentCreate(createRequest("/repo/one"), fake.paseo);
     await env.onAgentCreated({ id: "a1", workspaceId: "ws1", title: "🧭 Ship it" });
-    const result = await env.assignManager(paseo, { workspaceId: "ws1", agentId: "a2" });
-    expect(result.titleApplied).toBe(false);
+    fake.agents.get("a1")!.title = "🧭 Ship it";
+    const result = await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "a2" });
+    expect(result.assignmentApplied).toBe(true);
+    expect(result.titleApplied).toBe(true);
     expect(result.advisoryTitle).toBe("🧭 Working on login");
+    expect(result.formerManagerTitleApplied).toBe(true);
+    expect(result.formerManagerAdvisoryTitle).toBe("[former Lane Manager] Ship it");
+    expect(fake.agents.get("a2")?.title).toBe("🧭 Working on login");
+    expect(fake.agents.get("a1")?.title).toBe("[former Lane Manager] Ship it");
     expect(result.workspace).toMatchObject({ managerId: "a2" });
     expect(result.workspace.demoted.map((entry) => entry.agentId)).toEqual(["a1"]);
+  });
+
+  it("applies the manager title when assigning into a workspace with no previous manager", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "candidate", workspaceId: "ws1", cwd: "/repo/one", title: "Work on login", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const cli = titleCli(fake.agents);
+    const env = service({}, path.join(dir, "state.json"), cli.run);
+    await env.onWorkspaceCreated({ id: "ws1" });
+    const result = await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "candidate" });
+    expect(result).toMatchObject({
+      assignmentApplied: true,
+      titleApplied: true,
+      titleError: null,
+      advisoryTitle: "🧭 Work on login",
+      formerManagerTitleApplied: null,
+      formerManagerTitleError: null,
+      formerManagerAdvisoryTitle: null,
+    });
+    expect(fake.agents.get("candidate")?.title).toBe("🧭 Work on login");
+  });
+
+  it("restores the selected manager title when the former-manager title update fails", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "old", workspaceId: "ws1", cwd: "/repo/one", title: "🧭 Existing", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+      { id: "candidate", workspaceId: "ws1", cwd: "/repo/one", title: "Work on login", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const cli = titleCli(fake.agents, { failUpdateId: "old" });
+    const file = path.join(dir, "state.json");
+    const env = service({}, file, cli.run);
+    await env.onWorkspaceCreated({ id: "ws1" });
+    await createLaneEnvironmentStore(file).mutate(undefined, (state) => { state.workspaces.ws1.managerId = "old"; });
+    const result = await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "candidate" });
+    expect(result.assignmentApplied).toBe(false);
+    expect(result.assignmentError).toMatch(/Former-manager title failed/);
+    expect(result.titleApplied).toBe(false);
+    expect(result.formerManagerTitleApplied).toBe(false);
+    expect(result.workspace.managerId).toBe("old");
+    expect(fake.agents.get("candidate")?.title).toBe("Work on login");
+    expect(fake.agents.get("old")?.title).toBe("🧭 Existing");
+  });
+
+  it("does not commit an assignment when the selected manager title cannot be verified", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "candidate", workspaceId: "ws1", cwd: "/repo/one", title: "Work on login", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const cli = titleCli(fake.agents, { unavailable: true });
+    const env = service({}, path.join(dir, "state.json"), cli.run);
+    await env.onWorkspaceCreated({ id: "ws1" });
+    const result = await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "candidate" });
+    expect(result.assignmentApplied).toBe(false);
+    expect(result.titleApplied).toBe(false);
+    expect(result.titleError).toMatch(/spawn paseo ENOENT/);
+    expect(result.workspace.managerId).toBeNull();
+    expect(fake.agents.get("candidate")?.title).toBe("Work on login");
+  });
+
+  it("restores the selected title when revision-checked manager assignment cannot commit", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "candidate", workspaceId: "ws1", cwd: "/repo/one", title: "Work on login", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const file = path.join(dir, "state.json");
+    const competitor = createLaneEnvironmentStore(file);
+    const cli = titleCli(fake.agents);
+    let wroteCompetingRevision = false;
+    const runCli = async (args: readonly string[]) => {
+      const output = await cli.run(args);
+      if (!wroteCompetingRevision && args[0] === "agent" && args[1] === "update") {
+        wroteCompetingRevision = true;
+        await competitor.mutate(undefined, (state) => { state.workspaces.ws1.demoted.push({ agentId: "concurrent", demotedAt: now }); });
+      }
+      return output;
+    };
+    const env = service({}, file, runCli);
+    await env.onWorkspaceCreated({ id: "ws1" });
+    const result = await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "candidate" });
+    expect(result.assignmentApplied).toBe(false);
+    expect(result.assignmentError).toMatch(/revision/);
+    expect(result.titleApplied).toBe(false);
+    expect(result.titleError).toMatch(/title was restored/);
+    expect(result.workspace.managerId).toBeNull();
+    expect(fake.agents.get("candidate")?.title).toBe("Work on login");
+  });
+
+  it("restores both manager titles when succession title writes race with a store revision", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "old", workspaceId: "ws1", cwd: "/repo/one", title: "🧭 Existing topic", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+      { id: "candidate", workspaceId: "ws1", cwd: "/repo/one", title: "Work on login", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const file = path.join(dir, "state.json");
+    const competitor = createLaneEnvironmentStore(file);
+    const cli = titleCli(fake.agents);
+    let wroteCompetingRevision = false;
+    const runCli = async (args: readonly string[]) => {
+      const output = await cli.run(args);
+      if (!wroteCompetingRevision && args[0] === "agent" && args[1] === "update") {
+        wroteCompetingRevision = true;
+        await competitor.mutate(undefined, (state) => { state.workspaces.ws1.demoted.push({ agentId: "concurrent", demotedAt: now }); });
+      }
+      return output;
+    };
+    const env = service({}, file, runCli);
+    await env.onWorkspaceCreated({ id: "ws1" });
+    await competitor.mutate(undefined, (state) => { state.workspaces.ws1.managerId = "old"; });
+    const result = await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "candidate" });
+    expect(result.assignmentApplied).toBe(false);
+    expect(result.assignmentError).toMatch(/revision/);
+    expect(result.titleApplied).toBe(false);
+    expect(result.formerManagerTitleApplied).toBe(false);
+    expect(fake.agents.get("candidate")?.title).toBe("Work on login");
+    expect(fake.agents.get("old")?.title).toBe("🧭 Existing topic");
+    expect((await env.status("ws1")).workspace.managerId).toBe("old");
   });
 
   it("rejects assignment across workspaces, archived agents and unknown agents", async () => {
@@ -323,44 +477,10 @@ describe("lane environment lifecycle", () => {
       runPaseoCli?: (args: readonly string[]) => Promise<string>,
     ) {
       const fake = fakePaseo({ agents, createFails, sendFails });
-      const env = service({}, path.join(dir, "state.json"), runPaseoCli);
+      const env = service({}, path.join(dir, "state.json"), runPaseoCli ?? titleCli(fake.agents).run);
       await env.onWorkspaceCreated({ id: "ws1" });
       await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "m1" });
       return { env, ...fake };
-    }
-
-    function titleCli(agents: Map<string, FakeAgent>, options: { staleInspectAfterUpdate?: boolean; unavailable?: boolean; wrongCwd?: boolean } = {}) {
-      const calls: string[][] = [];
-      let staleInspect = false;
-      const run = async (args: readonly string[]) => {
-        const command = [...args];
-        calls.push(command);
-        if (options.unavailable) throw new Error("spawn paseo ENOENT");
-        if (command[0] === "ls" && command[1] === "--global") {
-          return JSON.stringify([...agents.values()].map((agent) => ({
-            id: agent.id, name: agent.title, cwd: options.wrongCwd && agent.id === "m1" ? "/repo/two" : agent.cwd,
-          })));
-        }
-        if (command[0] === "inspect") {
-          const agent = agents.get(command[1]);
-          if (!agent) throw new Error(`unknown agent ${command[1]}`);
-          let name = agent.title;
-          if (staleInspect && options.staleInspectAfterUpdate) {
-            staleInspect = false;
-            name = "🧭 Ship it";
-          }
-          return JSON.stringify({ Id: agent.id, Name: name, Cwd: options.wrongCwd && agent.id === "m1" ? "/repo/two" : agent.cwd });
-        }
-        if (command[0] === "agent" && command[1] === "update") {
-          const agent = agents.get(command[2]);
-          if (!agent) throw new Error(`unknown agent ${command[2]}`);
-          agent.title = command[4];
-          if (options.staleInspectAfterUpdate && command[4]?.startsWith("[former Lane Manager]")) staleInspect = true;
-          return JSON.stringify({ Id: agent.id, Name: agent.title, Cwd: agent.cwd });
-        }
-        throw new Error(`unexpected Paseo CLI call: ${command.join(" ")}`);
-      };
-      return { run, calls };
     }
 
     it("creates a new session with the checkpoint, promotes it and demotes the old manager", async () => {
@@ -374,8 +494,8 @@ describe("lane environment lifecycle", () => {
       expect(result.workspace).toMatchObject({ managerId: "new-1", continuation: null });
       expect(result.workspace.demoted.map((entry) => entry.agentId)).toEqual(["m1"]);
       expect(result.demotionNotice).toBe("sent");
-      expect(result.titleApplied).toBe(false);
-      expect(result.titleError).toMatch(/test Paseo CLI unavailable/);
+      expect(result.titleApplied).toBe(true);
+      expect(result.titleError).toBeNull();
       expect(sent[0].agentId).toBe("m1");
       expect(result.limitations.join(" ")).toMatch(/not a native fork/);
     });
@@ -431,7 +551,7 @@ describe("lane environment lifecycle", () => {
       const cli = titleCli(fake.agents, { unavailable: true });
       const env = service({}, path.join(dir, "state.json"), cli.run);
       await env.onWorkspaceCreated({ id: "ws1" });
-      await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "m1" });
+      await createLaneEnvironmentStore(path.join(dir, "state.json")).mutate(undefined, (state) => { state.workspaces.ws1.managerId = "m1"; });
       const result = await env.continueManager(fake.paseo, { workspaceId: "ws1", fromAgentId: "m1", checkpoint: "Decisions: X" });
       expect(result.titleApplied).toBe(false);
       expect(result.titleError).toMatch(/spawn paseo ENOENT/);
@@ -444,7 +564,7 @@ describe("lane environment lifecycle", () => {
       const cli = titleCli(fake.agents, { wrongCwd: true });
       const env = service({}, path.join(dir, "state.json"), cli.run);
       await env.onWorkspaceCreated({ id: "ws1" });
-      await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "m1" });
+      await createLaneEnvironmentStore(path.join(dir, "state.json")).mutate(undefined, (state) => { state.workspaces.ws1.managerId = "m1"; });
       const result = await env.continueManager(fake.paseo, { workspaceId: "ws1", fromAgentId: "m1", checkpoint: "Decisions: X" });
       expect(result.titleApplied).toBe(false);
       expect(result.titleError).toMatch(/cwd does not match/);
@@ -481,7 +601,7 @@ describe("lane environment lifecycle", () => {
 
     it("blocks a second continuation while one is fresh, and reuses the request id once stale", async () => {
       const fake = fakePaseo({ agents: [manager] });
-      const env = service();
+      const env = service({}, path.join(dir, "state.json"), titleCli(fake.agents).run);
       await env.onWorkspaceCreated({ id: "ws1" });
       await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "m1" });
       const store = createLaneEnvironmentStore(path.join(dir, "state.json"));

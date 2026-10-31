@@ -8,7 +8,7 @@ import {
   type LaneEnvironmentWorkspaceView,
 } from "../shared/lane-environment";
 import {
-  type EnvironmentState, type LaneEnvironmentStore, type WorkspaceRecord,
+  StaleRevisionError, type EnvironmentState, type LaneEnvironmentStore, type WorkspaceRecord,
 } from "./lane-environment-store";
 
 export const PENDING_MANAGER_TTL_MS = 60_000;
@@ -95,7 +95,13 @@ export async function workspaceIdForDirectory(paseo: PaseoApi, directory: string
 async function readAgent(paseo: PaseoApi, agentId: string): Promise<EnvironmentAgent> {
   const refreshed = await paseo.agents.ref(agentId).refresh();
   if (!refreshed) throw new EnvironmentError(`Agent ${agentId} was not found on this host.`);
-  return refreshed.agent as unknown as EnvironmentAgent;
+  const agent = refreshed.agent as unknown as EnvironmentAgent;
+  // Keep a stable title/workspace/CWD snapshot across subsequent CLI mutations.
+  return {
+    ...agent,
+    ...(agent.runtimeInfo ? { runtimeInfo: { ...agent.runtimeInfo } } : {}),
+    ...(agent.pendingPermissions ? { pendingPermissions: [...agent.pendingPermissions] } : {}),
+  };
 }
 
 const runPaseoCli = (args: readonly string[]): Promise<string> => new Promise((resolve, reject) => {
@@ -176,32 +182,33 @@ async function observeRenameTarget(
 const titleMatches = (observation: RenameObservation, title: string | null): boolean =>
   observation.agent.title === title && observation.cliListName === title && observation.cliInspectName === title;
 
-type FormerTitleResult = { applied: boolean; error: string | null };
+type TitleUpdateResult = { applied: boolean | null; error: string | null };
 
 /** Rename only after the public CLI and this hook's SDK context agree on exact agent/workspace identity. */
-async function applyFormerManagerTitle(
+async function applyVerifiedAgentTitle(
   paseo: PaseoApi,
   runCli: (args: readonly string[]) => Promise<string>,
   input: {
     agentId: string; workspaceId: string; expectedCwd: string; previousTitle: string | null;
-    formerTitle: string; isStillFormerManager: () => Promise<boolean>;
+    requestedTitle: string; isStillAllowed: () => Promise<boolean>; purpose: string;
   },
-): Promise<FormerTitleResult> {
+): Promise<TitleUpdateResult> {
   const identity = { agentId: input.agentId, workspaceId: input.workspaceId, expectedCwd: input.expectedCwd };
   try {
-    if (!await input.isStillFormerManager()) throw new EnvironmentError("The manager changed before the former-manager title could be applied.");
+    if (!await input.isStillAllowed()) throw new EnvironmentError(`The workspace manager changed before the ${input.purpose} title could be applied.`);
     const before = await observeRenameTarget(paseo, runCli, identity);
     if (!titleMatches(before, input.previousTitle)) {
-      throw new EnvironmentError(`The old manager title did not match native and CLI readback; refusing to rename ${input.agentId}.`);
+      throw new EnvironmentError(`The existing title did not match native and CLI readback; refusing to rename ${input.agentId}.`);
     }
-    if (!await input.isStillFormerManager()) throw new EnvironmentError("The manager changed before the former-manager title could be applied.");
+    if (!await input.isStillAllowed()) throw new EnvironmentError(`The workspace manager changed before the ${input.purpose} title could be applied.`);
   } catch (error) {
-    return { applied: false, error: `Former-manager title was not changed: ${String(error)}` };
+    return { applied: false, error: `${input.purpose} title was not changed: ${String(error)}` };
   }
+  if (input.previousTitle === input.requestedTitle) return { applied: true, error: null };
 
   let updateError: unknown;
   try {
-    await runCli(["agent", "update", input.agentId, "--name", input.formerTitle, "--json"]);
+    await runCli(["agent", "update", input.agentId, "--name", input.requestedTitle, "--json"]);
   } catch (error) {
     updateError = error;
   }
@@ -210,32 +217,43 @@ async function applyFormerManagerTitle(
   let after: RenameObservation | null = null;
   let readbackError: unknown;
   try { after = await observe(); } catch (error) { readbackError = error; }
-  if (after && titleMatches(after, input.formerTitle)) return { applied: true, error: null };
+  if (after && titleMatches(after, input.requestedTitle)) {
+    try {
+      if (await input.isStillAllowed()) return { applied: true, error: null };
+      return { applied: null, error: `${input.purpose} title read back, but the workspace manager changed during the update.` };
+    } catch (error) {
+      return { applied: null, error: `${input.purpose} title read back, but manager state could not be verified: ${String(error)}` };
+    }
+  }
 
   // A failed command may have mutated before exiting. Retry readback once; rollback only if all
   // three public/native views now agree on the exact new title and manager state is still current.
   if (!after || !titleMatches(after, input.previousTitle)) {
     try { after = await observe(); } catch (error) { readbackError = error; }
-    if (after && titleMatches(after, input.formerTitle)) {
+    if (after && titleMatches(after, input.requestedTitle)) {
       try {
-        if (!await input.isStillFormerManager()) throw new EnvironmentError("The manager changed during title readback; refusing rollback.");
+        if (!await input.isStillAllowed()) throw new EnvironmentError("The workspace manager changed during title readback; refusing rollback.");
         if (input.previousTitle === null) throw new EnvironmentError("The prior title was empty and cannot be restored with the public CLI.");
         await runCli(["agent", "update", input.agentId, "--name", input.previousTitle, "--json"]);
         const restored = await observe();
         if (!titleMatches(restored, input.previousTitle)) throw new EnvironmentError("The previous title did not match after rollback.");
+        if (!await input.isStillAllowed()) throw new EnvironmentError("The workspace manager changed during title rollback.");
       } catch (rollbackError) {
         const cause = updateError ? ` CLI update error: ${String(updateError)}.` : "";
-        return { applied: false, error: `Former-manager title readback failed and rollback was not confirmed: ${String(rollbackError)}.${cause}` };
+        return { applied: null, error: `${input.purpose} title readback failed and rollback was not confirmed: ${String(rollbackError)}.${cause}` };
       }
       const cause = updateError ? ` CLI update error: ${String(updateError)}.` : "";
-      return { applied: false, error: `Former-manager title readback mismatched; the original title was restored.${cause}` };
+      return { applied: false, error: `${input.purpose} title readback mismatched; the original title was restored.${cause}` };
     }
   }
 
   const details = readbackError ? String(readbackError)
-    : `expected ${JSON.stringify(input.formerTitle)}, observed ${JSON.stringify(after?.agent.title)}`;
+    : `expected ${JSON.stringify(input.requestedTitle)}, observed ${JSON.stringify(after?.agent.title)}`;
   const updateDetails = updateError ? ` CLI update error: ${String(updateError)}.` : "";
-  return { applied: false, error: `Former-manager title was not confirmed: ${details}.${updateDetails}` };
+  if (after && titleMatches(after, input.previousTitle)) {
+    return { applied: false, error: `${input.purpose} title was not changed: ${details}.${updateDetails}` };
+  }
+  return { applied: null, error: `${input.purpose} title was not confirmed: ${details}.${updateDetails}` };
 }
 
 const isQuiescent = (agent: EnvironmentAgent): boolean =>
@@ -356,58 +374,189 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
     },
 
     /**
-     * Explicit promotion of an existing agent in the same workspace. Paseo's
-     * public SDK cannot rename an existing agent, so its title is left as is and
-     * an advisory title is returned for a person to apply manually.
+     * Explicit promotion applies the configured title to the selected agent and
+     * a former title to the outgoing manager before the revision-checked store
+     * commit. Any failed commit attempts to restore both original names.
      */
     async assignManager(paseo: PaseoApi, input: { workspaceId: string; agentId: string; expectedRevision?: number }) {
       const agent = await readAgent(paseo, input.agentId);
       if (agent.workspaceId !== input.workspaceId) throw new EnvironmentError(`Agent ${input.agentId} is not in workspace ${input.workspaceId}.`);
       if (agent.archivedAt) throw new EnvironmentError(`Agent ${input.agentId} is archived and cannot be assigned as manager.`);
       const current = await settings();
-      const topic = topicOf(agent.title, current) || "Lane";
-      const { storeRevision, result } = await store.mutate(input.expectedRevision, (state) => {
-        const record = state.workspaces[input.workspaceId] ?? blankRecord();
-        const previous = record.managerId;
-        if (previous && previous !== agent.id) {
-          record.demoted = [...record.demoted, { agentId: previous, demotedAt: now() }];
-        }
-        record.managerId = agent.id;
-        record.pendingManager = null;
-        state.workspaces[input.workspaceId] = record;
-        return { workspace: viewOf(input.workspaceId, state, current), previousManagerId: previous };
+      const initial = await store.read();
+      if (input.expectedRevision !== undefined && input.expectedRevision !== initial.revision) {
+        throw new StaleRevisionError(input.expectedRevision, initial.revision);
+      }
+      const previousManagerId = initial.workspaces[input.workspaceId]?.managerId ?? null;
+      const priorManagerTitle = agent.title;
+      const managerTopic = topicOf(agent.title, current) || "Lane";
+      const managerTitle = composeRoleTitle("lane-manager", managerTopic, current);
+      const formerStillCurrent = async () => ((await store.read()).workspaces[input.workspaceId]?.managerId ?? null) === previousManagerId;
+      const currentResult = async () => {
+        const latest = await store.read();
+        return { storeRevision: latest.revision, workspace: viewOf(input.workspaceId, latest, current) };
+      };
+      const failedAssignment = async (details: {
+        assignmentError: string; titleApplied: boolean | null; titleError: string | null;
+        formerManagerTitleApplied: boolean | null; formerManagerTitleError: string | null;
+        formerManagerAdvisoryTitle: string | null;
+      }) => ({
+        ...(await currentResult()), assignmentApplied: false, ...details, advisoryTitle: managerTitle,
       });
+      const restoreSelectedTitle = async (): Promise<TitleUpdateResult> => {
+        if (priorManagerTitle === null) {
+          return { applied: false, error: "The selected agent had no prior title; the public CLI cannot restore a null title." };
+        }
+        return applyVerifiedAgentTitle(paseo, runCli, {
+          agentId: agent.id, workspaceId: input.workspaceId, expectedCwd: agent.cwd ?? "",
+          previousTitle: managerTitle, requestedTitle: priorManagerTitle,
+          purpose: "Lane Manager rollback", isStillAllowed: formerStillCurrent,
+        });
+      };
 
-      let formerManagerTitleApplied: boolean | null = null;
-      let formerManagerTitleError: string | null = null;
-      let formerManagerAdvisoryTitle: string | null = null;
-      if (result.previousManagerId && result.previousManagerId !== agent.id) {
-        formerManagerAdvisoryTitle = formerManagerTitle("Lane");
-        try {
-          const previous = await readAgent(paseo, result.previousManagerId);
-          const topic = topicOf(previous.title, current) || "Lane";
-          formerManagerAdvisoryTitle = formerManagerTitle(topic);
-          const titleResult = await applyFormerManagerTitle(paseo, runCli, {
-            agentId: previous.id, workspaceId: input.workspaceId, expectedCwd: previous.cwd ?? "",
-            previousTitle: previous.title, formerTitle: formerManagerTitle(topic),
-            isStillFormerManager: async () => (await store.read()).workspaces[input.workspaceId]?.managerId === agent.id,
+      const managerTitleResult = await applyVerifiedAgentTitle(paseo, runCli, {
+        agentId: agent.id, workspaceId: input.workspaceId, expectedCwd: agent.cwd ?? "",
+        previousTitle: agent.title, requestedTitle: managerTitle, purpose: "Lane Manager",
+        isStillAllowed: formerStillCurrent,
+      });
+      if (managerTitleResult.applied !== true) {
+        let titleApplied = managerTitleResult.applied;
+        let titleError = managerTitleResult.error;
+        if (managerTitleResult.applied === null && priorManagerTitle !== null) {
+          const rollback = await applyVerifiedAgentTitle(paseo, runCli, {
+            agentId: agent.id, workspaceId: input.workspaceId, expectedCwd: agent.cwd ?? "",
+            previousTitle: managerTitle, requestedTitle: priorManagerTitle,
+            purpose: "Lane Manager rollback", isStillAllowed: formerStillCurrent,
           });
-          formerManagerTitleApplied = titleResult.applied;
-          formerManagerTitleError = titleResult.error;
+          titleApplied = rollback.applied === true ? false : null;
+          titleError = `${titleError ?? "Title readback was ambiguous."} ${rollback.error ?? ""}`.trim();
+        }
+        return failedAssignment({
+          assignmentError: titleError ?? "The Lane Manager title could not be verified.",
+          titleApplied, titleError,
+          formerManagerTitleApplied: null,
+          formerManagerTitleError: null, formerManagerAdvisoryTitle: null,
+        });
+      }
+
+      let previous: EnvironmentAgent | null = null;
+      let formerTitle: string | null = null;
+      let formerTitleResult: TitleUpdateResult | null = null;
+      if (previousManagerId && previousManagerId !== agent.id) {
+        try {
+          previous = await readAgent(paseo, previousManagerId);
+          if (previous.workspaceId !== input.workspaceId) {
+            throw new EnvironmentError(`Previous manager ${previousManagerId} is not in workspace ${input.workspaceId}.`);
+          }
+          const formerTopic = topicOf(previous.title, current) || "Lane";
+          formerTitle = formerManagerTitle(formerTopic);
+          formerTitleResult = await applyVerifiedAgentTitle(paseo, runCli, {
+            agentId: previous.id, workspaceId: input.workspaceId, expectedCwd: previous.cwd ?? "",
+            previousTitle: previous.title, requestedTitle: formerTitle, purpose: "Former-manager",
+            isStillAllowed: formerStillCurrent,
+          });
         } catch (error) {
-          formerManagerTitleApplied = false;
-          formerManagerTitleError = `Former-manager title was not changed: ${String(error)}`;
+          formerTitleResult = { applied: false, error: `Former-manager title was not changed: ${String(error)}` };
+        }
+        if (formerTitleResult.applied !== true) {
+          let formerApplied = formerTitleResult.applied;
+          let formerError = formerTitleResult.error;
+          if (formerTitleResult.applied === null && previous && formerTitle && previous.title !== null) {
+            const rollbackFormer = await applyVerifiedAgentTitle(paseo, runCli, {
+              agentId: previous.id, workspaceId: input.workspaceId, expectedCwd: previous.cwd ?? "",
+              previousTitle: formerTitle, requestedTitle: previous.title,
+              purpose: "Former-manager rollback", isStillAllowed: formerStillCurrent,
+            });
+            formerApplied = rollbackFormer.applied === true ? false : null;
+            formerError = `${formerError ?? "Title state was ambiguous."} ${rollbackFormer.error ?? ""}`.trim();
+          }
+          const rollbackManager = await restoreSelectedTitle();
+          const titleApplied = priorManagerTitle === managerTitle || priorManagerTitle === null
+            ? true : rollbackManager.applied === true ? false : null;
+          const titleError = titleApplied === false
+            ? "Assignment was not committed; the selected agent's original title was restored."
+            : titleApplied === true && priorManagerTitle === null
+              ? "Assignment was not committed; the public CLI cannot restore the selected agent's prior null title."
+              : rollbackManager.error;
+          return failedAssignment({
+            assignmentError: `Former-manager title failed: ${formerTitleResult.error ?? "not confirmed"}. ${rollbackManager.error ?? ""}`.trim(),
+            titleApplied,
+            titleError,
+            formerManagerTitleApplied: formerApplied,
+            formerManagerTitleError: formerError,
+            formerManagerAdvisoryTitle: formerTitle,
+          });
         }
       }
-      return {
-        storeRevision,
-        workspace: result.workspace,
-        titleApplied: false as const,
-        advisoryTitle: composeRoleTitle("lane-manager", topic, current),
-        formerManagerTitleApplied,
-        formerManagerTitleError,
-        formerManagerAdvisoryTitle,
-      };
+
+      try {
+        const committed = await store.mutate(initial.revision, (state) => {
+          const record = state.workspaces[input.workspaceId] ?? blankRecord();
+          if ((record.managerId ?? null) !== previousManagerId) {
+            throw new EnvironmentError(`Manager changed before assigning ${agent.id}; no manager state was committed.`);
+          }
+          if (previousManagerId && previousManagerId !== agent.id) {
+            record.demoted = [...record.demoted, { agentId: previousManagerId, demotedAt: now() }];
+          }
+          record.managerId = agent.id;
+          record.pendingManager = null;
+          state.workspaces[input.workspaceId] = record;
+          return viewOf(input.workspaceId, state, current);
+        });
+        return {
+          storeRevision: committed.storeRevision,
+          workspace: committed.result,
+          assignmentApplied: true,
+          assignmentError: null,
+          titleApplied: true,
+          titleError: null,
+          advisoryTitle: managerTitle,
+          formerManagerTitleApplied: formerTitleResult ? true : null,
+          formerManagerTitleError: formerTitleResult?.error ?? null,
+          formerManagerAdvisoryTitle: formerTitle,
+        };
+      } catch (error) {
+        const assignmentError = `Manager assignment was not committed: ${String(error)}`;
+        const rollbackManager = await restoreSelectedTitle();
+        const titleApplied = priorManagerTitle === managerTitle || priorManagerTitle === null
+          ? true : rollbackManager.applied === true ? false : null;
+        const titleError = priorManagerTitle === managerTitle
+          ? `${assignmentError}; the requested title was already present.`
+          : priorManagerTitle === null
+            ? `${assignmentError}; the public CLI cannot restore the selected agent's prior null title.`
+            : rollbackManager.applied === true
+              ? `${assignmentError}; the selected agent title was restored.`
+              : `${assignmentError}; selected title rollback was not confirmed: ${rollbackManager.error ?? "unknown error"}`;
+        let formerManagerTitleApplied: boolean | null = null;
+        let formerManagerTitleError: string | null = null;
+        if (previous && formerTitle && formerTitleResult?.applied === true) {
+          if (previous.title === formerTitle) {
+            formerManagerTitleApplied = true;
+          } else if (previous.title === null) {
+            formerManagerTitleApplied = true;
+            formerManagerTitleError = "Assignment was not committed; the public CLI cannot restore the former manager's prior null title.";
+          } else {
+            const rollbackFormer = await applyVerifiedAgentTitle(paseo, runCli, {
+              agentId: previous.id, workspaceId: input.workspaceId, expectedCwd: previous.cwd ?? "",
+              previousTitle: formerTitle, requestedTitle: previous.title,
+              purpose: "Former-manager rollback", isStillAllowed: formerStillCurrent,
+            });
+            formerManagerTitleApplied = rollbackFormer.applied === true ? false : null;
+            formerManagerTitleError = rollbackFormer.error;
+          }
+        } else if (formerTitleResult) {
+          formerManagerTitleApplied = formerTitleResult.applied;
+          formerManagerTitleError = formerTitleResult.error;
+        }
+        return failedAssignment({
+          assignmentError,
+          titleApplied,
+          titleError,
+          formerManagerTitleApplied,
+          formerManagerTitleError,
+          formerManagerAdvisoryTitle: formerTitle,
+        });
+      }
     },
 
     /**
@@ -481,10 +630,10 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
         throw new EnvironmentError(`Created session ${created.id}, but recording it failed: ${String(error)}. Retry continuation with the same checkpoint to reconcile.`);
       });
 
-      const titleResult = await applyFormerManagerTitle(paseo, runCli, {
+      const titleResult = await applyVerifiedAgentTitle(paseo, runCli, {
         agentId: from.id, workspaceId: input.workspaceId, expectedCwd: from.cwd ?? "",
-        previousTitle: from.title, formerTitle: formerManagerTitle(topic),
-        isStillFormerManager: async () => (await store.read()).workspaces[input.workspaceId]?.managerId === created.id,
+        previousTitle: from.title, requestedTitle: formerManagerTitle(topic), purpose: "Former-manager",
+        isStillAllowed: async () => (await store.read()).workspaces[input.workspaceId]?.managerId === created.id,
       });
 
       let demotionNotice: "sent" | "failed" = "sent";
