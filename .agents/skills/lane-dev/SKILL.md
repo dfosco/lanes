@@ -25,6 +25,11 @@ the whole technical outcome, including planning and breakdown, without a manager
 When assigned work by a Lane Manager, respect that narrower contract and keep
 manager contact. Do not turn either case into a new management layer.
 
+## Reasoning self-assessment
+
+Follow [model routing and reasoning policy](../lanes/references/model-routing.md) throughout your assigned work. The Lane Manager owns initial model routing; retain the assigned model unless the manager authorizes a different model. Independently adjust only your own reasoning effort at meaningful execution boundaries, based on uncertainty, failures, user speed preference and current phase. Apply changes only through verified host-supported current-session controls, and read back the effective setting. Never assume a skill instruction itself changes the runtime.
+
+
 ## Default output and explicit overrides
 
 For a directly authorized implementation outcome, plan and implement it in one
