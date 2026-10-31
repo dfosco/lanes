@@ -157,12 +157,17 @@ describe("Settings subviews", () => {
   });
 
   it("renders padded settings content and exposes the ordered routing policy editor", async () => {
-    await render();
-    await act(async () => { button("Routing").click(); }); await render();
-    expect(container.textContent).toContain("Provider-specific role defaults are configured");
-    expect(container.querySelector<HTMLInputElement>('input[aria-label="Usage warning thresholds (%)"]')?.placeholder).toBe("80, 90");
-    const padded = Array.from(container.querySelectorAll("div")).find((item) => item.style.padding === "16px");
-    expect(padded).toBeTruthy();
+    for (const width of [390, 1440]) {
+      await act(async () => { Object.defineProperty(window, "innerWidth", { configurable: true, value: width }); });
+      await render();
+      if (!container.querySelector('input[aria-label="Usage warning thresholds (%)"]')) {
+        await act(async () => { button("Routing").click(); }); await render();
+      }
+      expect(container.textContent).toContain("Provider-specific role defaults are configured");
+      expect(container.querySelector<HTMLInputElement>('input[aria-label="Usage warning thresholds (%)"]')?.placeholder).toBe("80, 90");
+      const padded = Array.from(container.querySelectorAll("div")).find((item) => item.style.padding === "16px");
+      expect(padded, `settings card padding at ${width}px`).toBeTruthy();
+    }
   });
 
   it("keeps an in-flight collaboration result scoped to the project that initiated it", async () => {
