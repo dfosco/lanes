@@ -121,6 +121,23 @@ exactly what could not be checked or registered. Continue independent authorized
 work when safe; do not fabricate success or treat registration as an execution
 gate. Registration does not select a delivery mode or authorize worker launches.
 
+### Keep work within the current workspace by default
+
+Unless the user explicitly directs a cross-workspace action, keep Lane Manager
+work, inspection, dispatch and agent communication within the current
+host-observed workspace and repository. Do not message agents in other
+workspaces, route or defer work across workspace boundaries, or inspect or
+mutate unrelated workspace state. Determine the current workspace and
+repository from actual host readback; do not infer them from a title, basename,
+path alone or a registry association.
+
+This default does not skip the required central Lanes discovery or reading
+canonical records for Lanes this manager actually manages. A central registry
+listing may show other projects or managers; listing them is not permission to
+adopt their work or inspect their workspace state. Same-workspace coordination
+and handoffs remain allowed. A user-directed cross-workspace request permits
+only the actions the user explicitly directs.
+
 ## Choose the delivery mode once per scope
 
 Before beginning new delivery scope, read the user's direction and any existing
