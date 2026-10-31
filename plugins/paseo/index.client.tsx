@@ -4,6 +4,7 @@ import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { WorkScreen } from "./client/work-screen";
 import { SettingsScreen } from "./client/settings";
 import { WorkspaceWorkScreen } from "./client/workspace-panel";
+import { registerLaneComposerPills } from "./client/lane-composer";
 
 const TITLE = "Lanes";
 
@@ -50,11 +51,11 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "open-clips-workspace",
-    title: "Open Lanes as workspace tab",
+    title: "Configure Lanes in this workspace",
     icon: "ListTodo",
-    keywords: ["clips", "lanes", "goals", "tasks", "workspace", "tab"],
+    keywords: ["clips", "lanes", "goals", "tasks", "workspace", "activate", "manager"],
     context: "workspace",
     onSelect: ({ openPanel }) => openPanel("work", { location: "workspace" }),
   });
-  return () => {};
+  return registerLaneComposerPills(client);
 }

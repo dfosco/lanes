@@ -28,6 +28,14 @@ vi.mock("@getpaseo/plugin/client", () => ({
     : rpc.name === "clips.review.open" ? vi.fn(async () => state.openedReview) : vi.fn(),
   useSettings: () => ({ status: "ready", values: {} }),
 }));
+vi.mock("@getpaseo/plugin/client/ui", () => ({
+  SettingsSection: ({ title, children }: any) => createElement("section", { "aria-label": title }, children),
+  SettingsCard: ({ children }: any) => createElement("div", {}, children),
+  SettingsAction: ({ actionLabel, disabled, onPress }: any) => createElement("button", { disabled, onClick: onPress }, actionLabel),
+  SettingsSelect: ({ label, value, options, onValueChange }: any) => createElement("label", {}, label,
+    createElement("select", { "aria-label": label, value, onChange: (event: any) => onValueChange(event.target.value) },
+      options.map((option: any) => createElement("option", { key: option.value, value: option.value }, option.label)))),
+}));
 vi.mock("@getpaseo/plugin/client/react-native", () => ({
   Icon: () => null,
   Modal: Object.assign(({ children, open, title }: any) => open ? createElement("div", { "aria-label": title }, children) : null, {
@@ -61,6 +69,7 @@ vi.mock("react-native", () => ({
   TextInput: ({ accessibilityLabel, value, onChangeText }: any) => createElement("input", {
     "aria-label": accessibilityLabel, value, onInput: (event: any) => onChangeText?.(event.currentTarget.value),
   }),
+  Switch: () => null,
   ActivityIndicator: () => null,
   Linking: { openURL: state.openUrl },
 }));

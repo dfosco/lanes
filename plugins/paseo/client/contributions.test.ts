@@ -9,6 +9,7 @@ vi.mock("@getpaseo/plugin/client", () => ({ useWorkspace }));
 vi.mock("@getpaseo/plugin/client/ui", () => ({ SidebarRow: () => null }));
 vi.mock("./work-screen", () => ({ WorkScreen: () => null }));
 vi.mock("./settings", () => ({ SettingsScreen: () => null }));
+vi.mock("./lane-composer", () => ({ registerLaneComposerPills: () => () => undefined }));
 
 function register() {
   const client = {
