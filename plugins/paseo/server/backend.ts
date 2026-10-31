@@ -21,7 +21,7 @@ import {
   branchName, branchPrefix, defaultProvider, executionFor, isActiveAgent, matchesWorkspace,
   promptFor, workspaceTitle, type AgentInfo, type WorkspaceInfo,
 } from "../shared/work";
-import { orderedRoleRoutes } from "../shared/model-routing";
+import { entryReasoningEffort, orderedRoleRoutes } from "../shared/model-routing";
 
 type Paseo = PluginHandlerContext["paseo"];
 type LocalProject = Project & { root: string; configPath: string };
@@ -378,6 +378,17 @@ export async function saveModelRoutingPolicy(paseo: Paseo, input: ModelRoutingPo
       }
     }
   }
+  for (const [role, efforts] of Object.entries(input.modelEffort ?? {})) {
+    for (const [choice, effort] of Object.entries(efforts)) {
+      if (!input.modelOrder[role as AgentRole].includes(choice)) throw new Error(`Reasoning effort for ${role} is set on unranked provider/model ${choice}.`);
+      const slash = choice.indexOf("/");
+      const model = catalog.find((candidate) => candidate.provider === choice.slice(0, slash))?.models
+        ?.find((candidate) => candidate.id === choice.slice(slash + 1));
+      if (!model?.thinkingOptions?.some((option) => option.id === effort)) {
+        throw new Error(`Reasoning effort ${effort} is unavailable for ${role} provider/model ${choice}.`);
+      }
+    }
+  }
   const cli = await findClips(paseo);
   const { stdout } = await command(cli.bin, [
     ...cli.prefix, "config", "--user", "model_routing_policy", JSON.stringify(input),
@@ -706,14 +717,8 @@ async function agentConfiguration(
         const entries = (await paseo.providers.snapshot({ cwd: root })).entries;
         const model = entries.find((entry) => entry.provider === provider)?.models?.find((candidate) => candidate.id === modelId);
         const availableEfforts = model?.thinkingOptions?.map((option) => option.id) ?? [];
-        const configuredIndex = policy.reasoningEffortOrder.indexOf(defaults.reasoningEffort);
-        const orderedEffort = configuredIndex < 0 ? undefined : availableEfforts.filter((effortId) =>
-          policy.reasoningEffortOrder.includes(effortId))
-          .sort((left, right) => Math.abs(policy.reasoningEffortOrder.indexOf(left) - configuredIndex) -
-            Math.abs(policy.reasoningEffortOrder.indexOf(right) - configuredIndex))[0];
-        const effort = defaults.reasoningEffort && availableEfforts.includes(defaults.reasoningEffort)
-          ? defaults.reasoningEffort
-          : orderedEffort ?? model?.defaultThinkingOptionId ?? "";
+        const effort = entryReasoningEffort(policy, role, provider, modelId, availableEfforts,
+          defaults.reasoningEffort, model?.defaultThinkingOptionId);
         roleDefaults = { ...defaults, model: modelId, reasoningEffort: effort, agent };
         break;
       }

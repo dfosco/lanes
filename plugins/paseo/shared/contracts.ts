@@ -101,6 +101,8 @@ export const modelRoutingPolicy = z.object({
   version: z.literal(1),
   providerOrder: z.array(z.string()),
   modelOrder: z.object({ manager: z.array(z.string()), dev: z.array(z.string()) }).strict(),
+  /** Optional reasoning effort per ranked `provider/model` entry; an entry without one uses the role default. */
+  modelEffort: z.object({ manager: z.record(z.string(), z.string()), dev: z.record(z.string(), z.string()) }).strict().optional(),
   reasoningEffortOrder: z.array(z.string()),
   warningThresholds: z.array(z.number().int().min(1).max(99)),
   handoffThreshold: z.number().int().min(1).max(100),

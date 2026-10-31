@@ -178,6 +178,25 @@ describe('Lane worker configuration', () => {
       expect(() => setModelRoutingPolicy({ ...policy, providerOrder: ['codex', 'codex'] }, { scope: 'user' })).toThrow(/unique/);
     });
 
+    it('persists optional per-entry reasoning efforts and rejects ones that are not ranked or malformed', () => {
+      const { root } = workspace(null);
+      vi.stubEnv('HOME', root);
+      vi.stubEnv('LANES_HOME', path.join(root, 'user-store'));
+      vi.stubEnv('CLIPS_HOME', '');
+      const policy = { version: 1, providerOrder: ['codex'], modelOrder: { manager: ['codex/gpt-6.1-sol'], dev: ['codex/gpt-6-luna', 'claude/claude-haiku-5-5'] },
+        reasoningEffortOrder: ['low', 'medium', 'high'], warningThresholds: [80, 90], handoffThreshold: 95 };
+      const withEffort = { ...policy, modelEffort: { manager: { 'codex/gpt-6.1-sol': 'high' }, dev: {} } };
+      expect(setModelRoutingPolicy(withEffort, { scope: 'user' }).modelEffort).toEqual({ manager: { 'codex/gpt-6.1-sol': 'high' }, dev: {} });
+      expect(getModelRoutingPolicy(root, { scope: 'user' }).modelEffort.manager).toEqual({ 'codex/gpt-6.1-sol': 'high' });
+      expect(setModelRoutingPolicy({ ...policy, modelEffort: { dev: { 'claude/claude-haiku-5-5': 'low' } } }, { scope: 'user' }).modelEffort)
+        .toEqual({ manager: {}, dev: { 'claude/claude-haiku-5-5': 'low' } });
+      expect(Object.hasOwn(setModelRoutingPolicy(policy, { scope: 'user' }), 'modelEffort')).toBe(false);
+      expect(() => setModelRoutingPolicy({ ...policy, modelEffort: { manager: { 'codex/other': 'high' } } }, { scope: 'user' })).toThrow(/not in the manager modelOrder/);
+      expect(() => setModelRoutingPolicy({ ...policy, modelEffort: { manager: { 'codex/gpt-6.1-sol': ' ' } } }, { scope: 'user' })).toThrow(/nonempty reasoning ID/);
+      expect(() => setModelRoutingPolicy({ ...policy, modelEffort: { qa: {} } }, { scope: 'user' })).toThrow(/manager and dev/);
+      expect(() => setModelRoutingPolicy({ ...policy, modelEffort: [] }, { scope: 'user' })).toThrow(/manager and dev/);
+    });
+
     it('rejects invalid values and malformed stored data without overwriting it', () => {
       const { root } = workspace(null);
       const userStore = path.join(root, 'user-store');

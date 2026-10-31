@@ -1,6 +1,6 @@
 # Provider quota awareness and failover (Paseo)
 
-Provider routing is separate from model routing and reasoning self-assessment. Lane Manager owns provider selection, and dev agents retain their bounded Task ownership until a verified handoff. The durable user policy is stored in `lanes.config.json`; read it with `lanes config --user model_routing_policy`. It contains `providerOrder`, per-role qualified `modelOrder`, `reasoningEffortOrder`, `warningThresholds`, and `handoffThreshold`. Change it persistently when the user asks for a durable routing change; do not substitute a one-turn override. Read/write provider-scoped role defaults with `lanes config --user --provider <catalog-id> <role-model-key>` and the same command with a value or `--unset`.
+Provider routing is separate from model routing and reasoning self-assessment. Lane Manager owns provider selection, and dev agents retain their bounded Task ownership until a verified handoff. The durable user policy is stored in `lanes.config.json`; read it with `lanes config --user model_routing_policy`. It contains `providerOrder`, per-role qualified `modelOrder`, an optional per-entry `modelEffort`, `reasoningEffortOrder`, `warningThresholds`, and `handoffThreshold`. Change it persistently when the user asks for a durable routing change; do not substitute a one-turn override. Read/write provider-scoped role defaults with `lanes config --user --provider <catalog-id> <role-model-key>` and the same command with a value or `--unset`.
 
 The policy shape is versioned and user-scoped. Example (replace the empty order with the user's chosen catalog IDs):
 
@@ -15,7 +15,7 @@ The policy shape is versioned and user-scoped. Example (replace the empty order 
 }
 ```
 
-Persist a requested change with `lanes config --user model_routing_policy '<JSON>'`, then read it back. `modelOrder` entries use exact `provider/model-id` values from the host catalog. Per-provider role defaults are separate and are the default models used when the model order has no entry for that provider. Legacy global model keys remain compatibility fallbacks; they do not replace provider-specific entries.
+Persist a requested change with `lanes config --user model_routing_policy '<JSON>'`, then read it back. `modelOrder` entries use exact `provider/model-id` values from the host catalog. `modelEffort` optionally pairs a ranked entry with a reasoning effort, as `{ "manager": { "codex/gpt-6.1-sol": "high" }, "dev": {} }`; each key must be ranked in the same role's `modelOrder`, and the effort must be one that model offers. An entry without one uses the provider/role default, and omitting `modelEffort` entirely is valid. Per-provider role defaults are separate and are the default models used when the model order has no entry for that provider. Legacy global model keys remain compatibility fallbacks; they do not replace provider-specific entries.
 
 ## Usage source and freshness
 

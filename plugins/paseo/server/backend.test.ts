@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { normalizeBoard, readProjectBoard, startWork } from "./backend";
+import { normalizeBoard, readProjectBoard, saveModelRoutingPolicy, setProjectCollaboration, startWork } from "./backend";
 import { branchName } from "../shared/work";
 
 describe("Lanes JSON board projection", () => {
@@ -114,3 +114,81 @@ it("reads a local Lanes project through the checkout CLI", async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 30_000);
+
+it("changes only the workspace repository's collaboration setting", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lanes-repository-collaboration-"));
+  const cli = fileURLToPath(new URL("../../../src/cli.js", import.meta.url));
+  const previous = Object.fromEntries(["LANES_HOME", "CLIPS_HOME", "LANES_CLI_PATH", "CLIPS_CLI_PATH"].map((key) => [key, process.env[key]]));
+  process.env.LANES_HOME = path.join(root, "home");
+  process.env.LANES_CLI_PATH = cli;
+  try {
+    const repositories = ["one", "two"].map((name) => {
+      const dir = path.join(root, name);
+      fs.mkdirSync(path.join(dir, ".lanes", "db"), { recursive: true });
+      execFileSync("git", ["init", "--quiet"], { cwd: dir });
+      execFileSync("git", ["remote", "add", "origin", `https://github.com/example/${name}.git`], { cwd: dir });
+      fs.writeFileSync(path.join(dir, ".lanes", "lanes.config.json"), JSON.stringify({ collaboration: false }));
+      return dir;
+    });
+    const paseo = { projects: { list: async () => ({ projects: repositories.map((dir, index) => ({
+      projectId: `p${index}`, projectKind: "git", projectRootPath: dir, projectDisplayName: `Repository ${index}`,
+    })) }) } } as Parameters<typeof setProjectCollaboration>[0];
+    const result = await setProjectCollaboration(paseo, { projectId: "p1", enabled: true });
+    expect(result.collaboration?.enabled).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(repositories[0], ".lanes", "lanes.config.json"), "utf8")).collaboration).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(repositories[1], ".lanes", "lanes.config.json"), "utf8")).collaboration).toBe(true);
+    expect((await readProjectBoard(paseo, "p0")).collaboration?.enabled).toBe(false);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);
+
+describe("saving per-entry reasoning efforts", () => {
+  const entries = [
+    { provider: "codex", status: "ready", enabled: true, models: [{ id: "gpt-6.1-sol", isSelectable: true, thinkingOptions: [{ id: "low" }, { id: "high" }] }] },
+    { provider: "antigravity", status: "ready", enabled: true, models: [{ id: "gemini-4-argon-high", isSelectable: true, thinkingOptions: [] }] },
+  ];
+  const paseo = { providers: { snapshot: async () => ({ entries }) } } as unknown as Parameters<typeof saveModelRoutingPolicy>[0];
+  const policy = {
+    version: 1 as const, providerOrder: ["codex", "antigravity"],
+    modelOrder: { manager: ["codex/gpt-6.1-sol", "antigravity/gemini-4-argon-high"], dev: ["codex/gpt-6.1-sol"] },
+    reasoningEffortOrder: ["low", "high"], warningThresholds: [80, 90], handoffThreshold: 95,
+  };
+
+  it("rejects an effort the model does not offer, including any effort on a model without effort levels", async () => {
+    await expect(saveModelRoutingPolicy(paseo, { ...policy, modelEffort: { manager: { "codex/gpt-6.1-sol": "ultra" }, dev: {} } }))
+      .rejects.toThrow("Reasoning effort ultra is unavailable for manager provider/model codex/gpt-6.1-sol");
+    await expect(saveModelRoutingPolicy(paseo, { ...policy, modelEffort: { manager: { "antigravity/gemini-4-argon-high": "high" }, dev: {} } }))
+      .rejects.toThrow("unavailable for manager provider/model antigravity/gemini-4-argon-high");
+  });
+
+  it("rejects an effort set on an entry that is not ranked for that role", async () => {
+    await expect(saveModelRoutingPolicy(paseo, { ...policy, modelEffort: { manager: {}, dev: { "antigravity/gemini-4-argon-high": "high" } } }))
+      .rejects.toThrow("unranked provider/model antigravity/gemini-4-argon-high");
+  });
+
+  it("persists a valid entry effort through the checkout CLI", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "clips-paseo-effort-"));
+    const cli = fileURLToPath(new URL("../../../src/cli.js", import.meta.url));
+    const previous = Object.fromEntries(["LANES_HOME", "CLIPS_HOME", "LANES_CLI_PATH", "CLIPS_CLI_PATH"].map((key) => [key, process.env[key]]));
+    process.env.LANES_HOME = path.join(root, "home");
+    delete process.env.CLIPS_HOME;
+    process.env.LANES_CLI_PATH = cli;
+    try {
+      const saved = await saveModelRoutingPolicy(paseo, { ...policy, modelEffort: { manager: { "codex/gpt-6.1-sol": "high" }, dev: {} } });
+      expect(saved.modelEffort).toEqual({ manager: { "codex/gpt-6.1-sol": "high" }, dev: {} });
+      const stored = JSON.parse(execFileSync(process.execPath, [cli, "config", "--user", "model_routing_policy"], {
+        cwd: root, env: { ...process.env, LANES_HOME: path.join(root, "home") },
+      }).toString());
+      expect(stored.modelEffort.manager).toEqual({ "codex/gpt-6.1-sol": "high" });
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});

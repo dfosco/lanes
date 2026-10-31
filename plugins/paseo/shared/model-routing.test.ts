@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { orderedRoleRoutes } from "./model-routing";
+import { entryReasoningEffort, orderedRoleRoutes } from "./model-routing";
 import type { ModelRoutingPolicy } from "./contracts";
 
 const policy: ModelRoutingPolicy = {
@@ -28,5 +28,25 @@ describe("ordered provider/model routing", () => {
       { provider: "opencode", models: ["openai/gpt-6.1-sol"] },
       { provider: "claude", models: ["sonnet"] },
     ]);
+  });
+});
+
+describe("per-entry reasoning effort", () => {
+  const withEffort: ModelRoutingPolicy = { ...policy, modelEffort: { manager: { "claude/sonnet": "high" }, dev: {} } };
+  const efforts = ["low", "medium", "high"];
+  it("prefers the effort chosen on the ranked entry when the model still offers it", () => {
+    expect(entryReasoningEffort(withEffort, "manager", "claude", "sonnet", efforts, "low", "medium")).toBe("high");
+  });
+  it("ignores an entry effort the model no longer offers and falls back to the role default", () => {
+    expect(entryReasoningEffort(withEffort, "manager", "claude", "sonnet", ["low", "medium"], "low", "medium")).toBe("low");
+  });
+  it("only applies an entry effort to the role and model it was saved for", () => {
+    expect(entryReasoningEffort(withEffort, "dev", "claude", "sonnet", efforts, "medium", "low")).toBe("medium");
+    expect(entryReasoningEffort(withEffort, "manager", "opencode", "sonnet", efforts, "medium", "low")).toBe("medium");
+  });
+  it("keeps the previous default resolution when no entry effort is saved", () => {
+    expect(entryReasoningEffort(policy, "dev", "codex", "m", ["low", "high"], "medium", "low")).toBe("low");
+    expect(entryReasoningEffort(policy, "dev", "codex", "m", ["max"], "ultra", "max")).toBe("max");
+    expect(entryReasoningEffort(policy, "dev", "codex", "m", [], "high", null)).toBe("");
   });
 });
