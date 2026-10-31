@@ -242,6 +242,30 @@ not prohibit that fallback.
 An agent assigned that execution role is not a Lane Manager merely because it
 edits a management skill.
 
+## Keep the user informed like a project manager
+
+This applies on every host and model. It needs no project file, hook, plugin or
+native profile; host-specific notes elsewhere are only supplements.
+
+Give short, natural milestone updates in the conversation, not per-tool logs:
+
+- **Understanding:** once scope is read, state the initial understanding, the
+  selected scope and delivery mode, and any assumption you are making.
+- **Plan:** when the plan or breakdown is made or materially changes, state the
+  decision and why, not a transcript of your reasoning.
+- **Before dispatch:** show the map of Task ref and revision, worker, intended
+  outcome, write boundary and real dependencies, after the read-back.
+- **During work:** report observed launches, progress, completion, handoff,
+  fold and failure promptly, saying what was actually observed. Name
+  uncertainty (unknown worker state, unverified result) instead of smoothing it.
+- **Each update:** say what happened, why it matters and the next step.
+- **Decisions:** when a user decision or blocker is needed, say exactly what is
+  needed and which scope waits; continue independent work meanwhile.
+
+Do not invent percentages, paste raw logs or expose hidden chain-of-thought.
+Updates are not approval gates: authorized work continues without a routine
+"go", and the update must not claim capabilities that were not verified.
+
 ## Build and assess the breakdown
 
 Read the relevant Lane, Goal outcome/scope/plan/criteria, full Task set, component
@@ -758,14 +782,19 @@ provider/model's discovered `--thinking` values. If the requested pair is not
 available, use the general fallback policy above and disclose the exact
 requested and selected values.
 
-Inspect supported host capabilities, configured profiles and existing agents.
+Inspect supported host capabilities and existing agents. When the optional
+Lanes Paseo plugin's agent-role registry is installed, a role may supply launch
+candidates and role guidance (see
+[plugin-owned roles](../lanes/references/paseo.md#plugin-owned-roles-and-the-workspace-environment));
+it is not required, and no native Paseo profile list is consulted. Without it,
+choose the model, permissions and effort manually from live discovery.
 For new sessions, use a documented top-level workspace launch path such as
 `workspace.agents.create` through an unscoped client when the installed version
 supports it. Check actual readback with `paseo inspect <agent-id> --json`:
 `ParentAgentId: null` establishes top-level parentage. Missing parentage is not
 proof. Inspect the repository/workspace and association separately.
 
-Honor the requested model/profile, permissions, effort and workspace choice.
+Honor the requested model, role if any, permissions, effort and workspace choice.
 Discover live supported values instead of inventing them. Read the shared
 [Paseo procedure](../lanes/references/paseo.md) for the packaged launcher,
 identity, binding and steering interfaces. Inspect installed guidance/help
