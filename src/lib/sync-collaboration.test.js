@@ -273,6 +273,39 @@ describe('explicit collaboration lifecycle', () => {
     expect(calls).not.toContain('attacker/redirect');
   });
 
+  it('creates issues in each repository origin, never the plugin repository', () => {
+    for (const name of ['one', 'two']) {
+      const { root, db, env } = workspace({ collaboration: true, remote: `https://github.com/example/${name}.git`, fakeGh: false });
+      const bin = path.join(root, 'bin');
+      fs.mkdirSync(bin);
+      fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh
+printf '%s | %s\n' "$GH_REPO" "$*" >> "$GH_LOG"
+if [ "$GH_REPO" != "example/${name}" ]; then exit 1; fi
+if [ "$1" = "issue" ] && [ "$2" = "create" ]; then
+  cat >/dev/null
+  printf 'https://github.com/example/${name}/issues/200\n'
+elif [ "$1" = "api" ]; then
+  case "$*" in
+    */parent) echo 'HTTP 404: Not Found' >&2; exit 1;;
+    *) printf '{"id":999,"state":"open"}\n';;
+  esac
+else
+  printf '[]\n'
+fi
+`);
+      fs.chmodSync(path.join(bin, 'gh'), 0o755);
+      env.PATH = `${bin}:${process.env.PATH}`;
+      seedGoal(db);
+      const result = run(root, { ...env, GH_REPO: 'dfosco/lanes' }, 'sync', '#g1');
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      const calls = fs.readFileSync(env.GH_LOG, 'utf8');
+      expect(calls).toContain(`example/${name} | issue create`);
+      expect(calls).toContain(`--repo example/${name}`);
+      expect(calls).not.toContain('dfosco/lanes');
+      expect(fs.readFileSync(path.join(db, 'g001.jsonl'), 'utf8')).toContain(`https://github.com/example/${name}/issues/200`);
+    }
+  });
+
   it('does not adopt a typed issue attachment as a managed Goal during import', () => {
     const attachedIssue = {
       id: 'att-00000000-0000-4000-8000-000000000002',

@@ -26,7 +26,7 @@ afterEach(() => {
   else process.env.LANES_CLI_PATH = previousCanonical;
   fs.rmSync(root, { recursive: true, force: true });
 });
-function source(name: string, id = "clips-workspaces", enabled = true) {
+function source(name: string, id = "lanes", enabled = true) {
   const directory = path.join(root, name, "plugins/paseo");
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, "paseo-plugin.json"), JSON.stringify({ id }));
@@ -40,6 +40,11 @@ it("uses the configured relocated checkout and ignores disabled or unrelated sou
   const result = await findClips(sdk({ customRuntimeId: installed, old: source("old", "clips-workspaces", false), other: source("other", "different") }));
   expect(result).toEqual({ bin: process.execPath, prefix: [path.resolve(fs.realpathSync(installed.path), "../../src/cli.js")] });
   expect(command).toHaveBeenCalledWith(result.bin, [...result.prefix, "--version"], { timeout: 60_000 });
+});
+it("still recognizes an enabled installation using the previous runtime ID", async () => {
+  const installed = source("legacy-install", "clips-workspaces");
+  const result = await findClips(sdk({ legacy: installed }));
+  expect(result.prefix).toEqual([path.resolve(fs.realpathSync(installed.path), "../../src/cli.js")]);
 });
 it("rejects missing and ambiguous configured sources without trying PATH", async () => {
   await expect(findClips(sdk())).rejects.toThrow("0 enabled sources");

@@ -28,9 +28,10 @@ but **Lanes is the work system**, not GitHub Issues.
   through the exact record and attachment reference, so edits and missing files
   stay visible without storing snapshots. Rendering treats content as text;
   HTML is not executed and remote content is not fetched.
-- **GitHub collaboration:** A project-local On/Off control changes only the
-  selected project's configuration. Toggling does not publish. When enabled,
-  later supported Lanes record mutations may sync automatically.
+- **GitHub collaboration:** In a repository workspace's Lanes panel, the
+  repository collaboration control changes only that repository's configuration.
+  Sync targets its Git origin, not the plugin repository. Toggling does not publish.
+  When enabled, later supported Lanes record mutations may sync automatically.
 - **Run in Paseo:** Starts an agent in a new Git worktree branch for that exact
   Lanes reference. **Workspace only** creates the worktree without starting
   an agent. **Open workspace** returns to an existing one; **Start agent** starts
@@ -67,13 +68,17 @@ Install this plugin directly from the Lanes monorepo:
 
 ```sh
 paseo plugin add git:dfosco/lanes:plugins/paseo --ref main
-paseo plugin ls clips-workspaces --json
+paseo plugin ls lanes --json
 ```
 
-The runtime ID is `clips-workspaces`. The explicit `git:` prefix selects the
+The runtime ID is `lanes`. The explicit `git:` prefix selects the
 repository rather than a registry listing. Paseo keeps the full monorepo checkout,
 including the canonical Lanes CLI and skills. Preparation runs these exact commands
 from `plugins/paseo` before Paseo moves and activates the candidate:
+
+Installations from before the rename used the ID `clips-workspaces`. Remove that
+old plugin entry before adding `lanes`; keeping both enabled makes CLI source
+discovery ambiguous. The rename does not change the Lanes data store.
 
 ```sh
 npm ci --prefix ../.. --omit=dev --ignore-scripts
@@ -113,14 +118,14 @@ The client does not upload a local source directory or install dependencies ther
 
 ### Update and rollback
 
-Save the current Git revision from `paseo plugin ls clips-workspaces --json`
+Save the current Git revision from `paseo plugin ls lanes --json`
 before updating. Review the proposed revision, then apply it:
 
 ```sh
-paseo plugin update clips-workspaces --check
-paseo plugin update clips-workspaces
-paseo plugin ls clips-workspaces --json
-paseo plugin logs clips-workspaces
+paseo plugin update lanes --check
+paseo plugin update lanes
+paseo plugin ls lanes --json
+paseo plugin logs lanes
 ```
 
 An ordinary Git update proposes the remote's default HEAD. The initial `--ref`
@@ -128,7 +133,7 @@ does **not** pin future updates. Select a reviewed commit explicitly to update
 or roll back without a second CLI prompt:
 
 ```sh
-paseo plugin update clips-workspaces --ref <reviewed-commit-sha>
+paseo plugin update lanes --ref <reviewed-commit-sha>
 ```
 
 Install/update runs both locked preparation commands before validation and
@@ -136,7 +141,7 @@ activation. Failed preparation or activation retains the previous installation.
 A successful update must be rolled back explicitly to the saved commit; there is
 no automatic persistent version pin. Directory sources are skipped by `update`:
 restore the desired full checkout revision, rerun preparation, then use
-`paseo plugin reload clips-workspaces`. Reload itself does not install dependencies.
+`paseo plugin reload lanes`. Reload itself does not install dependencies.
 An existing runtime ID is rejected by install. Switching an existing directory
 installation to a Git source requires an explicit remove and add; do not use that
 as an update or discard a development checkout unintentionally.
@@ -148,8 +153,8 @@ Run **Lanes** from the Paseo sidebar or Command Center. Configure a ready
 provider in Paseo to start agents. **Lanes settings** selects launch defaults.
 
 **CLI resolution:** The backend reads public `paseo.config.get()` plugin sources.
-It selects the single enabled source whose manifest ID is exactly
-`clips-workspaces`, then runs that full checkout's `src/cli.js` with the server's
+It selects the single enabled source whose manifest ID is `lanes` (and recognizes
+the former `clips-workspaces` ID for existing installations), then runs that full checkout's `src/cli.js` with the server's
 Node executable. It uses the final installed path, including after staging moves.
 A missing or ambiguous source fails with guidance instead of choosing an arbitrary
 `lanes` from `PATH`. Multiple enabled copies need an explicit `LANES_CLI_PATH`
@@ -167,7 +172,7 @@ The plugin's server process reads Lanes data by invoking
 Project directories, config filenames and user directories can independently use
 old or new naming. Conflicting populated stores are reported, not silently
 selected. No extra database, GitHub authentication, or issue sync is required.
-The `clips-workspaces` runtime ID and persisted record/session keys remain stable.
+The current runtime ID is `lanes`; existing Lanes records and session keys are unchanged.
 
 ## CLI for configured sessions
 
@@ -439,8 +444,8 @@ npm ci --ignore-scripts
 npm run typecheck
 npm test
 paseo plugin install "$PWD"
-paseo plugin reload clips-workspaces
-paseo plugin logs clips-workspaces
+paseo plugin reload lanes
+paseo plugin logs lanes
 ```
 
 Paseo supplies host SDK, React and Zod modules to compiled entries and compiles the

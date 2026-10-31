@@ -1,5 +1,5 @@
 {
-  "id": "clips-workspaces",
+  "id": "lanes",
   "name": "Lanes",
   "description": "Browse Lanes, Goals and Tasks, run them in Paseo worktree workspaces, and see which agents are working now.",
   "requirements": {

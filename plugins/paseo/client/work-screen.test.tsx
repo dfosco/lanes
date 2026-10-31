@@ -364,26 +364,26 @@ describe("attachments and collaboration", () => {
     }
   });
 
-  it("keeps project collaboration controls in Settings instead of the work board", async () => {
+  it("offers collaboration only in the matching workspace repository", async () => {
     state.board = {
       lanes: [lane], goals: [goal, outside], warnings: [],
       collaboration: { enabled: false, state: "disabled", scope: "project", automatic_mutation_sync: false },
     };
-    const screen = await mountScreen();
+    const screen = await mountScreen({ currentWorkspaceId: "w1", currentWorkspaceProjectId: "p1" });
     try {
-      await act(async () => {
-        screen.container.querySelector<HTMLButtonElement>('[aria-label="More actions for lane #l001"]')!.click();
-      });
-      const focus = [...screen.container.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent === "Focus lane");
-      await act(async () => { focus!.click(); });
-      expect(screen.container.textContent).toContain("Publish releases");
-      expect(screen.container.textContent).not.toContain("GitHub collaboration:");
-      expect(screen.container.textContent).toContain("Publish releases");
+      expect(screen.container.querySelector('[aria-label="Repository collaboration"]')).not.toBeNull();
+      await act(async () => { screen.container.querySelector<HTMLButtonElement>('[aria-label="Repository collaboration"]')!.click(); });
+      expect(screen.container.textContent).toContain("GitHub collaboration · Project 1");
+      await act(async () => { [...screen.container.querySelectorAll<HTMLButtonElement>('button[role="tab"]')]
+        .find((button) => button.textContent === "Project 2")!.click(); });
+      expect(screen.container.querySelector('[aria-label="Repository collaboration"]')).toBeNull();
       expect(state.updateCollaboration).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
     }
+    const global = await mountScreen();
+    try { expect(global.container.querySelector('[aria-label="Repository collaboration"]')).toBeNull(); }
+    finally { await global.unmount(); }
   });
 });
 

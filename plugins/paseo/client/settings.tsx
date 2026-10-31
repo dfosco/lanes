@@ -1,24 +1,25 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { usePaseo, useRpc, useSettings } from "@getpaseo/plugin/client";
 import { SettingsAction, SettingsCard, SettingsInput, SettingsSection, SettingsSelect } from "@getpaseo/plugin/client/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import {
-  collaborationRpc, projectsRpc, roleModelDefaultsRpc, saveRoleModelDefaultsRpc,
-  boardRpc, modelRoutingPolicyRpc, saveModelRoutingPolicyRpc, preferences,
+  roleModelDefaultsRpc, saveRoleModelDefaultsRpc,
+  modelRoutingPolicyRpc, saveModelRoutingPolicyRpc, preferences,
   type AgentRole, type ModelRoutingPolicy, type Preferences,
 } from "../shared/contracts";
 import { FULL_ACCESS_MODE } from "../shared/permission-modes";
 import { AgentConfigFields } from "./agent-configuration";
 import { ResourceSettings } from "./resource-settings";
+import { SortableOrderEditor } from "./sortable-order";
 import { defaultProvider } from "../shared/work";
 
 type Theme = PluginSurfaceProps["theme"];
-type Section = "collaboration" | "resources" | "routing" | AgentRole;
+type Section = "resources" | "routing" | AgentRole;
 
 function Nav({ section, setSection, theme }: { section: Section; setSection: (section: Section) => void; theme: Theme }) {
-  const items: [Section, string][] = [["collaboration", "Collaboration"], ["manager", "Lane Manager"], ["dev", "Lane Dev"], ["routing", "Routing"], ["resources", "Resources"]];
+  const items: [Section, string][] = [["manager", "Lane Manager"], ["dev", "Lane Dev"], ["routing", "Routing"], ["resources", "Resources"]];
   return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
     {items.map(([value, label]) => <Pressable key={value} accessibilityRole="button" onPress={() => setSection(value)}
       style={{ borderWidth: 1, borderColor: section === value ? theme.colors.accent : theme.colors.border,
@@ -26,45 +27,6 @@ function Nav({ section, setSection, theme }: { section: Section; setSection: (se
       <Text style={{ color: section === value ? theme.colors.accentForeground : theme.colors.foreground, fontSize: 12 }}>{label}</Text>
     </Pressable>)}
   </View>;
-}
-
-function CollaborationSettings({ theme }: { theme: Theme }) {
-  const fetchProjects = useRpc(projectsRpc);
-  const fetchBoard = useRpc(boardRpc);
-  const update = useRpc(collaborationRpc);
-  const cache = useQueryClient();
-  const projects = useQuery({ queryKey: ["clips.settings.projects"], queryFn: () => fetchProjects({}) });
-  const [projectId, setProjectId] = useState("");
-  const selected = projects.data?.projects.find((project) => project.projectId === projectId) ?? projects.data?.projects[0];
-  const board = useQuery({ queryKey: ["clips.settings.collaboration", selected?.projectId],
-    queryFn: () => fetchBoard({ projectId: selected!.projectId }), enabled: Boolean(selected) });
-  const mutation = useMutation({ mutationFn: (input: { projectId: string; enabled: boolean }) => update(input),
-    onSuccess: async (result, input) => { await cache.invalidateQueries({ queryKey: ["clips.board"] });
-      cache.setQueryData(["clips.settings.collaboration", input.projectId], result); } });
-  const capability = board.data?.collaboration;
-  const savingThisProject = mutation.isPending && mutation.variables?.projectId === selected?.projectId;
-  const errorThisProject = mutation.isError && mutation.variables?.projectId === selected?.projectId;
-  return <SettingsSection title="Project collaboration">
-    <SettingsCard>
-      <View style={{ padding: 16, gap: 12 }}>
-      {projects.isLoading ? <ActivityIndicator color={theme.colors.foregroundMuted} /> : null}
-      {projects.isError ? <Text style={{ color: theme.colors.statusDanger }}>Projects unavailable: {String(projects.error)}</Text> : null}
-      {selected ? <>
-        <SettingsSelect label="Project" hint="Collaboration is stored in the selected project’s Lanes configuration."
-          value={selected.projectId} options={(projects.data?.projects ?? []).map((p) => ({ value: p.projectId, label: p.label }))}
-          onValueChange={setProjectId} />
-        {board.isLoading ? <ActivityIndicator color={theme.colors.foregroundMuted} /> : null}
-        {board.isError ? <Text style={{ color: theme.colors.statusDanger }}>Collaboration state unavailable: {String(board.error)}</Text> : null}
-        {capability ? <SettingsAction label="GitHub collaboration" hint={capability.error ??
-          `Project setting · ${capability.state}${capability.scope ? ` · ${capability.scope}` : ""}`}
-          actionLabel={savingThisProject ? "Saving…" : capability.enabled === null ? "Unavailable" : capability.enabled ? "Disable" : "Enable"}
-          disabled={savingThisProject || capability.enabled === null || capability.state === "invalid"}
-          onPress={() => mutation.mutate({ projectId: selected.projectId, enabled: !capability.enabled })} /> : null}
-        {errorThisProject ? <Text style={{ color: theme.colors.statusDanger }}>Could not update project collaboration: {String(mutation.error)}</Text> : null}
-      </> : null}
-      </View>
-    </SettingsCard>
-  </SettingsSection>;
 }
 
 function RoleSettings({ role, theme, hostId }: { role: AgentRole; theme: Theme; hostId: string }) {
@@ -124,7 +86,7 @@ function RoleSettings({ role, theme, hostId }: { role: AgentRole; theme: Theme; 
   };
   return <SettingsSection title={role === "manager" ? "Lane Manager defaults" : "Lane Dev defaults"}>
     <SettingsCard>
-      <View style={{ padding: 16, gap: 16 }}>
+      <View style={{ padding: 8, gap: 10 }}>
       {catalog.isLoading || query.isLoading ? <ActivityIndicator color={theme.colors.foregroundMuted} /> : null}
       {catalog.isError ? <Text style={{ color: theme.colors.statusDanger }}>Paseo providers unavailable: {String(catalog.error)}</Text> : null}
       {providerEntries.length ? <SettingsSelect label="Provider" hint="Defaults are stored independently for each provider."
@@ -172,6 +134,8 @@ function RoutingSettings({ theme, hostId }: { theme: Theme; hostId: string }) {
   const [providerOrder, setProviderOrder] = useState("");
   const [managerModels, setManagerModels] = useState("");
   const [devModels, setDevModels] = useState("");
+  const [managerEfforts, setManagerEfforts] = useState<Record<string, string>>({});
+  const [devEfforts, setDevEfforts] = useState<Record<string, string>>({});
   const [reasoningOrder, setReasoningOrder] = useState("");
   const [warnings, setWarnings] = useState("80, 90");
   const [handoff, setHandoff] = useState("95");
@@ -183,6 +147,8 @@ function RoutingSettings({ theme, hostId }: { theme: Theme; hostId: string }) {
     setProviderOrder(policyQuery.data.providerOrder.join(", "));
     setManagerModels(policyQuery.data.modelOrder.manager.join(", "));
     setDevModels(policyQuery.data.modelOrder.dev.join(", "));
+    setManagerEfforts(policyQuery.data.modelEffort?.manager ?? {});
+    setDevEfforts(policyQuery.data.modelEffort?.dev ?? {});
     setReasoningOrder(policyQuery.data.reasoningEffortOrder.join(", "));
     setWarnings(policyQuery.data.warningThresholds.join(", "));
     setHandoff(String(policyQuery.data.handoffThreshold));
@@ -193,36 +159,69 @@ function RoutingSettings({ theme, hostId }: { theme: Theme; hostId: string }) {
   const modelOrder = { manager: managerModels.split(",").map((item) => item.trim()).filter(Boolean),
     dev: devModels.split(",").map((item) => item.trim()).filter(Boolean) };
   const reasoningEffortOrder = reasoningOrder.split(",").map((item) => item.trim()).filter(Boolean);
+  // Only efforts on ranked entries are meaningful; an entry without one uses the provider/role default.
+  const rankedEfforts = (efforts: Record<string, string>, ranked: string[]) =>
+    Object.fromEntries(ranked.filter((item) => efforts[item]).map((item) => [item, efforts[item]!]));
+  const modelEffort = { manager: rankedEfforts(managerEfforts, modelOrder.manager), dev: rankedEfforts(devEfforts, modelOrder.dev) };
+  const savedEffort = { manager: rankedEfforts(policy.modelEffort?.manager ?? {}, policy.modelOrder.manager),
+    dev: rankedEfforts(policy.modelEffort?.dev ?? {}, policy.modelOrder.dev) };
+  const hasEfforts = Object.keys(modelEffort.manager).length > 0 || Object.keys(modelEffort.dev).length > 0;
   const changed = providerOrder !== policy.providerOrder.join(", ") || managerModels !== policy.modelOrder.manager.join(", ") ||
     devModels !== policy.modelOrder.dev.join(", ") || reasoningOrder !== policy.reasoningEffortOrder.join(", ") ||
-    warnings !== policy.warningThresholds.join(", ") || handoff !== String(policy.handoffThreshold);
+    warnings !== policy.warningThresholds.join(", ") || handoff !== String(policy.handoffThreshold) ||
+    JSON.stringify(modelOrder.manager.map((item) => modelEffort.manager[item] ?? "")) !== JSON.stringify(policy.modelOrder.manager.map((item) => savedEffort.manager[item] ?? "")) ||
+    JSON.stringify(modelOrder.dev.map((item) => modelEffort.dev[item] ?? "")) !== JSON.stringify(policy.modelOrder.dev.map((item) => savedEffort.dev[item] ?? ""));
   const save = async () => {
     setSaving(true); setError(null);
     try {
-      await writePolicy({ version: 1, providerOrder: order, modelOrder, reasoningEffortOrder, warningThresholds, handoffThreshold });
+      await writePolicy({ version: 1, providerOrder: order, modelOrder, ...(hasEfforts ? { modelEffort } : {}),
+        reasoningEffortOrder, warningThresholds, handoffThreshold });
       await policyQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : String(saveError));
     } finally { setSaving(false); }
   };
   const providerNames = new Map(readyProviders.map((entry) => [entry.provider, entry.label ?? entry.provider]));
+  // Dropdown choices come from the live host catalog (every ready provider, including antigravity).
+  // While it is loading or unavailable the editors fall back to free-text entry.
+  const catalogReady = Boolean(catalog.data) && !catalog.isError && readyProviders.length > 0;
+  const providerOptions = catalogReady ? readyProviders.map((entry) => ({ value: entry.provider, label: entry.label ?? entry.provider })) : undefined;
+  const modelOptions = catalogReady ? readyProviders.flatMap((entry) => (entry.models ?? []).filter((model) => model.isSelectable !== false)
+    .map((model) => ({ value: `${entry.provider}/${model.id}`, label: `${entry.label ?? entry.provider} · ${model.label ?? model.id}` }))) : undefined;
+  // Each ranked model offers only the reasoning levels the host reports for it (none for e.g. antigravity).
+  const modelEfforts = new Map<string, { value: string; label: string }[]>(readyProviders.flatMap((entry) => (entry.models ?? []).map((model) =>
+    [`${entry.provider}/${model.id}`, (model.thinkingOptions ?? []).map((option) => ({ value: option.id, label: option.label ?? option.id }))] as [string, { value: string; label: string }[]])));
+  const effortChoices = catalogReady ? (item: string) => modelEfforts.get(item) ?? [] : undefined;
+  const effortOptions = catalogReady ? [...new Set([...emptyRoutingPolicy.reasoningEffortOrder,
+    ...readyProviders.flatMap((entry) => (entry.models ?? []).flatMap((model) => (model.thinkingOptions ?? []).map((option) => option.id)))])]
+    .map((id) => ({ value: id, label: id })) : undefined;
   return <SettingsSection title="Provider routing and handoff">
     <SettingsCard>
-      <View style={{ padding: 16, gap: 14 }}>
+      <View style={{ padding: 8, gap: 10 }}>
         {policyQuery.isLoading || catalog.isLoading ? <ActivityIndicator color={theme.colors.foregroundMuted} /> : null}
         {policyQuery.isError ? <Text style={{ color: theme.colors.statusDanger }}>Routing policy unavailable: {String(policyQuery.error)}</Text> : null}
         {catalog.isError ? <Text style={{ color: theme.colors.statusDanger }}>Provider catalog unavailable: {String(catalog.error)}</Text> : null}
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>
           Provider-specific role defaults are configured on the Lane Manager and Lane Dev tabs. Set this order to make those defaults the normal route for new work; an empty provider order preserves the existing global/default launch choice. Provider order chooses the fallback tier, and the role's model order ranks models within a provider. Running agents are never changed here.
         </Text>
-        <SettingsInput label="Provider order" hint={`Comma-separated Paseo provider IDs, highest priority first. Ready: ${[...providerNames.keys()].join(", ") || "none"}.`}
-          key={`${policyQuery.dataUpdatedAt ?? "loading"}-providers`} initialValue={providerOrder} onChangeText={setProviderOrder} placeholder="codex, opencode, claude" />
-        <SettingsInput label="Lane Manager model order" hint="Optional qualified provider/model IDs, highest priority first; per-provider defaults are used when empty."
-          key={`${policyQuery.dataUpdatedAt ?? "loading"}-manager`} initialValue={managerModels} onChangeText={setManagerModels} placeholder="codex/gpt-6.1-sol, opencode/openai/gpt-6.1-sol" />
-        <SettingsInput label="Lane Dev model order" hint="Optional qualified provider/model IDs, highest priority first; per-provider defaults are used when empty."
-          key={`${policyQuery.dataUpdatedAt ?? "loading"}-dev`} initialValue={devModels} onChangeText={setDevModels} placeholder="codex/gpt-6-luna, opencode/openai/gpt-6-luna" />
-        <SettingsInput label="Reasoning effort order" hint="Effort IDs ordered from lower to higher reasoning; each provider/model must support the chosen value."
-          key={`${policyQuery.dataUpdatedAt ?? "loading"}-effort`} initialValue={reasoningOrder} onChangeText={setReasoningOrder} placeholder="low, medium, high, xhigh, max" />
+        <SortableOrderEditor theme={theme} label="Provider order"
+          hint={`Drag providers into priority order. Ready providers: ${[...providerNames.keys()].join(", ") || "none"}.`}
+          value={providerOrder} onChange={setProviderOrder} placeholder="Add provider ID"
+          options={providerOptions} selectLabel="Add provider" />
+        <SortableOrderEditor theme={theme} label="Lane Manager model order"
+          hint="Drag to set model priority and choose each model's reasoning effort. Default effort uses the provider/role default."
+          value={managerModels} onChange={setManagerModels} placeholder="Add provider/model ID"
+          options={modelOptions} selectLabel="Add model"
+          efforts={managerEfforts} onEffortsChange={setManagerEfforts} effortOptions={effortChoices} />
+        <SortableOrderEditor theme={theme} label="Lane Dev model order"
+          hint="Drag to set model priority and choose each model's reasoning effort. Default effort uses the provider/role default."
+          value={devModels} onChange={setDevModels} placeholder="Add provider/model ID"
+          options={modelOptions} selectLabel="Add model"
+          efforts={devEfforts} onEffortsChange={setDevEfforts} effortOptions={effortChoices} />
+        <SortableOrderEditor theme={theme} label="Reasoning effort order"
+          hint="Drag from lower to higher reasoning; each provider/model must support the chosen value."
+          value={reasoningOrder} onChange={setReasoningOrder} placeholder="Add effort ID"
+          options={effortOptions} selectLabel="Add effort" />
         <SettingsInput label="Usage warning thresholds (%)" hint="Notify at each threshold when fresh host quota data is checked. Example: 80, 90."
           initialValue={warnings} onChangeText={setWarnings} placeholder="80, 90" />
         <SettingsInput label="Provider handoff threshold (%)" hint="At this usage level, route new work to the next eligible provider in the order."
@@ -239,15 +238,13 @@ function RoutingSettings({ theme, hostId }: { theme: Theme; hostId: string }) {
 
 export function SettingsScreen({ theme, host }: PluginSurfaceProps) {
   const settings = useSettings(preferences);
-  const [section, setSection] = useState<Section>("collaboration");
+  const [section, setSection] = useState<Section>("manager");
   return <View style={{ padding: 12, gap: 8 }}>
-    <Text style={{ color: theme.colors.foreground, fontSize: 20, fontWeight: "700" }}>Lanes settings</Text>
     <Nav section={section} setSection={setSection} theme={theme} />
     {section === "resources" ? <ResourceSettings key={host.id} theme={theme} hostId={host.id} />
       : settings.status === "loading" ? <ActivityIndicator color={theme.colors.foregroundMuted} />
         : settings.status === "error" || settings.status === "invalid"
           ? <Text style={{ color: theme.colors.statusDanger }}>Lanes settings unavailable: {settings.error}</Text>
-            : section === "collaboration" ? <CollaborationSettings theme={theme} />
             : section === "routing" ? <RoutingSettings theme={theme} hostId={host.id} />
             : <RoleSettings key={section} role={section} theme={theme} hostId={host.id} />}
   </View>;

@@ -20,6 +20,7 @@ import { focusScope, focusedLane, goalGroup, isActive, revealStartedWorkspace, w
 import { getFocusIntent, getWorkspaceFocusIntent, projectAfterFocusIntent, requestLaneFocus, subscribeFocusIntent } from "./focus-intent";
 import { LabelChips, LabelManager } from "./labels";
 import { uniqueRunningAgentCount } from "./running-count";
+import { RepositoryCollaboration } from "./repository-collaboration";
 
 type Theme = PluginSurfaceProps["theme"];
 type Start = (ref: string, mode: StartMode, workspaceId?: string) => void;
@@ -1091,6 +1092,9 @@ export function WorkScreen({
       ) : null}
       {project ? (
         <>
+          {currentWorkspaceId && currentWorkspaceProjectId && project.projectIds.includes(currentWorkspaceProjectId) && board.data?.collaboration ?
+            <RepositoryCollaboration key={`${host.id}:${project.projectId}`} hostId={host.id} projectId={project.projectId}
+              projectLabel={project.label} capability={board.data.collaboration} theme={theme} /> : null}
           {currentWorkspaceId && project && currentWorkspaceProjectId &&
           !project.projectIds.includes(currentWorkspaceProjectId) ? (
             <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>

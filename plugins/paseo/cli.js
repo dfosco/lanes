@@ -14,6 +14,7 @@ import { acquireLaunchLock } from "./server/launch-lock.ts";
 import { assertUnclaimed, launchLaneManager } from "./server/lane-managers.ts";
 
 const pluginRoot = path.dirname(fileURLToPath(import.meta.url));
+const runtimePluginId = JSON.parse(readFileSync(path.join(pluginRoot, "paseo-plugin.json"), "utf8")).id;
 const localClipsCli = path.resolve(pluginRoot, "../../src/cli.js");
 const help = `Lanes Paseo CLI
 
@@ -467,7 +468,7 @@ export async function resourceCommand(driver, command, options) {
       method = "clips.resources.handoff";
     } else method = "clips.resources.fold";
   }
-  return driver.invokePluginRpc("clips-workspaces", method, input);
+  return driver.invokePluginRpc(runtimePluginId, method, input);
 }
 
 async function main() {

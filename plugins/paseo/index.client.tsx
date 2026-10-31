@@ -37,7 +37,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addSettingsScreen({
     id: "preferences",
-    title: "Lanes settings",
+    title: "Settings",
     icon: "Settings",
     Component: SettingsScreen,
   });

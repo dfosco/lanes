@@ -17,7 +17,8 @@ export async function findClips(paseo: Paseo): Promise<ClipsCommand> {
       if (source.source !== "directory" || source.enabled === false) continue;
       try {
         const manifest = JSON.parse(fs.readFileSync(path.join(source.path, "paseo-plugin.json"), "utf8"));
-        if (manifest.id === "clips-workspaces") roots.add(fs.realpathSync(source.path));
+        // Keep locating installations made before the runtime ID was renamed.
+        if (manifest.id === "lanes" || manifest.id === "clips-workspaces") roots.add(fs.realpathSync(source.path));
       } catch {
         // Other plugins and stale directories cannot identify this installation.
       }

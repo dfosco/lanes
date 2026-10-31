@@ -123,6 +123,19 @@ describe('local installation switching', () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
+  it('falls back from a stale saved checkout path to this valid checkout', () => {
+    const { root, project, env } = fixture();
+    const statePath = path.join(env.CLIPS_HOME, 'installation.json');
+    try {
+      fs.mkdirSync(env.CLIPS_HOME, { recursive: true });
+      fs.writeFileSync(statePath, JSON.stringify({ mode: 'prod', dev_checkout: path.join(root, 'workspace', 'clips') }));
+      execFileSync(process.execPath, [devCli, 'dev', '--project', project], { cwd: root, env });
+      const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      expect(state.mode).toBe('dev');
+      expect(state.dev_checkout).toBe(fs.realpathSync(process.cwd()));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }, 15_000);
+
   it('preserves legacy packages but refuses unsafe prod activation and dispatch', () => {
     const { root, project, env } = fixture({ legacy: true });
     try {

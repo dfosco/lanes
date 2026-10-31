@@ -2,13 +2,16 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { collaborationRpc, projectsRpc, roleModelDefaultsRpc, saveRoleModelDefaultsRpc } from "../shared/contracts";
 import { SettingsScreen } from "./settings";
 
 const state = vi.hoisted(() => ({
   projectRpc: vi.fn(), boardRpc: vi.fn(), collaborationRpc: vi.fn(), roleDefaultsRpc: vi.fn(), saveRoleDefaultsRpc: vi.fn(),
   routingPolicyRpc: vi.fn(), saveRoutingPolicyRpc: vi.fn(),
-  settingsSave: vi.fn(), cache: [] as any[], collaborationPromise: undefined as undefined | { resolve: (value: any) => void; reject: (error: Error) => void },
+  settingsSave: vi.fn(),
+  panConfigs: [] as any[],
+  routingPolicy: { version: 1, providerOrder: ["codex", "opencode", "claude"],
+    modelOrder: { manager: ["codex/manager", "opencode/manager"], dev: ["codex/dev", "claude/dev"] },
+    reasoningEffortOrder: ["low", "medium", "high"], warningThresholds: [80, 90], handoffThreshold: 95 },
 }));
 const values = {
   agent: "codex/legacy", thinkingOptionId: "high", featureValues: { old: true }, modeId: "restricted",
@@ -45,15 +48,23 @@ vi.mock("react-native", async () => {
   return {
      View: ({ children, accessibilityLabel, style }: any) => h("div", { "aria-label": accessibilityLabel, style }, children),
     Text: ({ children }: any) => h("span", {}, children),
-    Pressable: ({ children, accessibilityRole, onPress }: any) => h("button", { role: accessibilityRole, onClick: onPress }, children),
-    ActivityIndicator: () => h("span", {}, "Loading"),
-  };
+     Pressable: ({ children, accessibilityRole, accessibilityLabel, disabled, onPress }: any) => h("button", {
+       role: accessibilityRole, "aria-label": accessibilityLabel, disabled, onClick: onPress,
+     }, children),
+     ActivityIndicator: () => h("span", {}, "Loading"),
+     PanResponder: { create: (config: any) => { state.panConfigs.push(config); return { panHandlers: config }; } },
+   };
 });
 vi.mock("@getpaseo/plugin/client/react-native", async () => {
   const { createElement: h } = await import("react");
-  return { TextInput: ({ accessibilityLabel, placeholder, value, onChangeText }: any) => h("input", {
-    "aria-label": accessibilityLabel, placeholder, value, onInput: (event: any) => onChangeText(event.currentTarget.value),
-  }) };
+  return {
+    TextInput: ({ accessibilityLabel, placeholder, value, onChangeText }: any) => h("input", {
+      "aria-label": accessibilityLabel, placeholder, value, onInput: (event: any) => onChangeText(event.currentTarget.value),
+    }),
+    ScrollView: ({ children }: any) => h("div", {}, children),
+    Modal: Object.assign(({ title, open, children }: any) => open ? h("div", { role: "dialog", "aria-label": title }, children) : null,
+      { Content: ({ children }: any) => h("div", {}, children) }),
+  };
 });
 vi.mock("./agent-configuration", async () => {
   const { createElement: h } = await import("react");
@@ -71,38 +82,24 @@ vi.mock("./agent-configuration", async () => {
   ) };
 });
 vi.mock("@tanstack/react-query", async () => {
-  const { useState } = await import("react");
   return {
     useQuery: ({ queryKey }: any) => {
-      if (queryKey[0] === "clips.settings.projects") return { data: { projects: [
-        { projectId: "p1", projectIds: ["p1"], label: "Project one" }, { projectId: "p2", projectIds: ["p2"], label: "Project two" },
-      ] } };
-      if (queryKey[0] === "clips.settings.collaboration") return { data: { collaboration: {
-        enabled: queryKey[1] === "p1", state: "enabled", scope: "project",
-      } } };
       if (queryKey[0] === "clips.role-defaults") return { data: { role: queryKey[1], model: "model", agent: "codex/model",
         reasoningEffort: "high", source: "user" }, refetch: vi.fn() };
-      if (queryKey[0] === "clips.role-defaults.providers" || queryKey[0] === "clips.routing.providers") return { data: [
+      if (queryKey[0] === "clips.routing.providers") return { data: [
+        { provider: "codex", label: "Codex", status: "ready", enabled: true, models: [{ id: "model",
+          thinkingOptions: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] }] },
+        { provider: "antigravity", label: "Antigravity", status: "ready", enabled: true, models: [
+          { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", isSelectable: true },
+          { id: "hidden", isSelectable: false },
+        ] },
+        { provider: "claude", label: "Claude", status: "offline", enabled: true, models: [{ id: "not-ready" }] },
+      ] };
+      if (queryKey[0] === "clips.role-defaults.providers") return { data: [
         { provider: "codex", label: "Codex", status: "ready", enabled: true, models: [{ id: "model" }] },
       ] };
-      if (queryKey[0] === "clips.model-routing-policy") return { data: { version: 1, providerOrder: [], modelOrder: { manager: [], dev: [] },
-        reasoningEffortOrder: ["low", "medium", "high"], warningThresholds: [80, 90], handoffThreshold: 95 }, refetch: vi.fn() };
+       if (queryKey[0] === "clips.model-routing-policy") return { data: state.routingPolicy, refetch: vi.fn() };
       return { isLoading: false };
-    },
-    useQueryClient: () => ({ invalidateQueries: vi.fn(), setQueryData: (...args: any[]) => state.cache.push(args) }),
-    useMutation: (options: any) => {
-      const [snapshot, setSnapshot] = useState<any>({ isPending: false, isError: false, variables: undefined });
-      return { ...snapshot, mutate: (variables: any) => {
-        setSnapshot({ isPending: true, isError: false, variables });
-        if (variables?.projectId) {
-          state.collaborationPromise = undefined;
-          const pending = new Promise((resolve, reject) => { state.collaborationPromise = { resolve, reject }; });
-          void pending.then((result) => options.onSuccess(result, variables)).catch((error) => options.onError?.(error, variables)).finally(() => setSnapshot({ isPending: false, isError: false, variables }));
-        } else {
-          void options.mutationFn(variables).then((result: any) => options.onSuccess?.(result, variables))
-            .catch((error: any) => setSnapshot({ isPending: false, isError: true, error, variables }));
-        }
-      } };
     },
   };
 });
@@ -112,7 +109,8 @@ const theme = { colors: { foreground: "#fff", foregroundMuted: "#aaa", border: "
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
-  vi.clearAllMocks(); state.cache = []; state.collaborationPromise = undefined;
+  vi.clearAllMocks();
+  state.panConfigs = [];
   state.projectRpc.mockResolvedValue({ projects: [] });
   state.boardRpc.mockResolvedValue({ collaboration: { enabled: false, state: "disabled", scope: "project" } });
   state.collaborationRpc.mockResolvedValue({});
@@ -129,6 +127,10 @@ const render = async () => act(async () => root.render(createElement(SettingsScr
 const button = (label: string) => {
   const found = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((item) => item.getAttribute("aria-label") === label || item.textContent === label);
   expect(found, label).toBeTruthy(); return found!;
+};
+const addFrom = async (trigger: string, optionLabel: string, which = 0) => {
+  await act(async () => { container.querySelectorAll<HTMLButtonElement>(`button[aria-label^="${trigger}:"]`)[which]!.click(); });
+  await act(async () => { container.querySelector<HTMLButtonElement>(`[role="dialog"] button[aria-label="${optionLabel}"]`)!.click(); });
 };
 const select = async (label: string, value: string) => act(async () => {
   const found = Array.from(container.querySelectorAll<HTMLSelectElement>("select")).find((item) => item.getAttribute("aria-label") === label);
@@ -165,20 +167,105 @@ describe("Settings subviews", () => {
       }
       expect(container.textContent).toContain("Provider-specific role defaults are configured");
       expect(container.querySelector<HTMLInputElement>('input[aria-label="Usage warning thresholds (%)"]')?.placeholder).toBe("80, 90");
-      const padded = Array.from(container.querySelectorAll("div")).find((item) => item.style.padding === "16px");
+      const padded = Array.from(container.querySelectorAll("div")).find((item) => item.style.padding === "8px" || item.style.padding === "16px");
       expect(padded, `settings card padding at ${width}px`).toBeTruthy();
     }
   });
 
-  it("keeps an in-flight collaboration result scoped to the project that initiated it", async () => {
+  it("does not offer repository selection or collaboration in global settings", async () => {
     await render();
-    await act(async () => { button("Disable").click(); });
-    expect(state.collaborationPromise).toBeTruthy();
-    await select("Project", "p2"); await render();
-    expect(container.textContent).not.toContain("Saving…");
-    expect(container.textContent).not.toContain("Could not update project collaboration");
-    await act(async () => { state.collaborationPromise!.resolve({ collaboration: { enabled: true } }); await Promise.resolve(); });
-    expect(state.cache).toContainEqual([["clips.settings.collaboration", "p1"], { collaboration: { enabled: true } }]);
-    expect(state.cache).not.toContainEqual(expect.arrayContaining([["clips.settings.collaboration", "p2"]]));
+    expect(container.textContent).not.toContain("Lanes settings");
+    expect(container.textContent).not.toContain("Collaboration");
+    expect(container.querySelector('select[aria-label="Project"]')).toBeNull();
+    expect(state.projectRpc).not.toHaveBeenCalled();
+  });
+
+  it("saves the dragged order of all four lists without changing thresholds", async () => {
+    await render();
+    await act(async () => { button("Routing").click(); });
+    expect(button("Save routing policy").disabled).toBe(true);
+    const drags = [state.panConfigs[0], state.panConfigs[3], state.panConfigs[5], state.panConfigs[7]];
+    for (const drag of drags) {
+      await act(async () => {
+        drag.onPanResponderGrant({}, {});
+        drag.onPanResponderMove({}, { dy: 49 });
+        drag.onPanResponderRelease({}, {});
+      });
+    }
+    expect(button("Save routing policy").disabled).toBe(false);
+    await act(async () => { button("Save routing policy").click(); });
+    expect(state.saveRoutingPolicyRpc).toHaveBeenCalledWith({
+      version: 1, providerOrder: ["opencode", "codex", "claude"],
+      modelOrder: { manager: ["opencode/manager", "codex/manager"], dev: ["claude/dev", "codex/dev"] },
+      reasoningEffortOrder: ["medium", "low", "high"], warningThresholds: [80, 90], handoffThreshold: 95,
+    });
+  });
+
+  it("offers ready providers, their selectable models and reasoning levels from the live catalog in pickers", async () => {
+    await render();
+    await act(async () => { button("Routing").click(); });
+    expect(container.querySelector('input[aria-label="Add to Provider order"]')).toBeNull();
+    expect(container.textContent).toContain("Ready providers: codex, antigravity");
+    const open = async (trigger: string) => {
+      await act(async () => { container.querySelector<HTMLButtonElement>(`button[aria-label^="${trigger}:"]`)!.click(); });
+      return Array.from(container.querySelectorAll('[role="dialog"] button')).map((option) => option.getAttribute("aria-label"));
+    };
+    const pick = (label: string) => act(async () => { container.querySelector<HTMLButtonElement>(`[role="dialog"] button[aria-label="${label}"]`)!.click(); });
+    expect(await open("Add provider")).toEqual(["Antigravity"]);
+    await pick("Antigravity");
+    expect(await open("Add model")).toEqual(["Codex · model", "Antigravity · Gemini 4 Argon (High)"]);
+    await pick("Antigravity · Gemini 4 Argon (High)");
+    expect(await open("Add effort")).toEqual(["none", "off", "xhigh", "max", "ultra", "ultracode"]);
+    await pick("ultra");
+    await act(async () => { button("Save routing policy").click(); });
+    expect(state.saveRoutingPolicyRpc).toHaveBeenCalledWith(expect.objectContaining({
+      providerOrder: ["codex", "opencode", "claude", "antigravity"],
+      modelOrder: { manager: ["codex/manager", "opencode/manager", "antigravity/gemini-4-argon-high"], dev: ["codex/dev", "claude/dev"] },
+      reasoningEffortOrder: ["low", "medium", "high", "ultra"],
+    }));
+  });
+
+  it("saves a reasoning effort chosen next to a ranked model, only for models that offer one", async () => {
+    await render();
+    await act(async () => { button("Routing").click(); });
+    await addFrom("Add model", "Codex · model");
+    await addFrom("Add model", "Antigravity · Gemini 4 Argon (High)");
+    const trigger = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label^="${label}"]`)!;
+    expect(trigger("Reasoning effort for antigravity/gemini-4-argon-high:").disabled).toBe(true);
+    await act(async () => { trigger("Reasoning effort for codex/model:").click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="High"]')!.click(); });
+    expect(trigger("Reasoning effort for codex/model:").textContent).toContain("High");
+    await act(async () => { button("Save routing policy").click(); });
+    expect(state.saveRoutingPolicyRpc).toHaveBeenCalledWith(expect.objectContaining({
+      modelOrder: { manager: ["codex/manager", "opencode/manager", "codex/model", "antigravity/gemini-4-argon-high"], dev: ["codex/dev", "claude/dev"] },
+      modelEffort: { manager: { "codex/model": "high" }, dev: {} },
+    }));
+  });
+
+  it("marks only an effort change as a pending routing change", async () => {
+    await render();
+    await act(async () => { button("Routing").click(); });
+    expect(button("Save routing policy").disabled).toBe(true);
+    await addFrom("Add model", "Codex · model");
+    await act(async () => { button("Remove codex/model").click(); });
+    expect(button("Save routing policy").disabled).toBe(true);
+    await addFrom("Add model", "Codex · model");
+    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label^="Reasoning effort for codex/model:"]')!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Low"]')!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label^="Reasoning effort for codex/model:"]')!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="Default effort"]')!.click(); });
+    await act(async () => { button("Remove codex/model").click(); });
+    expect(button("Save routing policy").disabled).toBe(true);
+  });
+
+  it("retains reordered rows and reports a failed save", async () => {
+    state.saveRoutingPolicyRpc.mockRejectedValueOnce(new Error("Cannot save policy"));
+    await render();
+    await act(async () => { button("Routing").click(); });
+    await act(async () => { button("Move codex down").click(); });
+    await act(async () => { button("Save routing policy").click(); });
+    expect(container.textContent).toContain("Cannot save policy");
+    expect(Array.from(container.querySelectorAll('[aria-label^="Reorder "]')).slice(0, 3)
+      .map((item) => item.getAttribute("aria-label"))).toEqual(["Reorder opencode", "Reorder codex", "Reorder claude"]);
   });
 });

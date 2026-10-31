@@ -203,13 +203,23 @@ function saveInstalledPackage(globalPath, state) {
 }
 
 function devCheckout(args, state) {
-  const requested = args.checkout || process.env.LANES_DEV_PATH || process.env.CLIPS_DEV_PATH || state.dev_checkout || CHECKOUT_ROOT;
-  const root = fs.realpathSync(path.resolve(requested));
-  const manifest = packageAt(root);
-  if (!manifest || manifest.name !== PACKAGE_NAME || !fs.existsSync(path.join(root, '.git'))) {
-    throw new Error(`Lanes development checkout not found: ${root}. Pass --checkout <path>.`);
+  const explicit = args.checkout || process.env.LANES_DEV_PATH || process.env.CLIPS_DEV_PATH;
+  const candidates = explicit ? [explicit] : [state.dev_checkout, CHECKOUT_ROOT].filter(Boolean);
+  let lastError;
+  for (const candidate of [...new Set(candidates)]) {
+    let root;
+    try {
+      root = fs.realpathSync(path.resolve(candidate));
+      const manifest = packageAt(root);
+      if (manifest?.name === PACKAGE_NAME && fs.existsSync(path.join(root, '.git'))) return root;
+      lastError = new Error(`Lanes development checkout is not a Lanes Git repository: ${root}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (explicit) break;
   }
-  return root;
+  const requested = explicit || state.dev_checkout || CHECKOUT_ROOT;
+  throw new Error(`Lanes development checkout not found: ${requested}. ${lastError?.message || ''} Pass --checkout <path> to select a checkout.`.trim());
 }
 
 function parseSwitchArgs(argv) {

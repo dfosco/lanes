@@ -15,6 +15,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("@getpaseo/plugin/client", () => ({
   useRpc: (rpc: { name: string }) => rpc.name === "clips.resource-manager.status" ? state.statusRpc : state.projectsRpc,
+  usePaseo: () => ({ providers: { snapshot: async () => ({ entries: [] }) } }),
   useSettings: (definition: { id: string }) => definition.id === "resource-manager" ? state.settings
     : state.launchSettings ?? { status: "ready", values: preferences.schema.parse({}), revision: "p1", save: vi.fn() },
 }));
@@ -119,7 +120,7 @@ describe("Resource settings", () => {
     expect(cache.getQueryData(["clips.resource-manager.status", "host-1"])).toEqual(defaultStatus);
     await render("host-2", true);
     expect(cache.getQueryData(["clips.resource-manager.status", "host-2"])).toEqual(defaultStatus);
-    await click("Collaboration");
+    await click("Lane Manager");
     expect(cache.getQueryCache().find({ queryKey: ["clips.resource-manager.status", "host-2"] })?.getObserversCount() ?? 0).toBe(0);
   });
 
