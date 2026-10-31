@@ -20,6 +20,13 @@ Turn an authorized request into a complete delivery flow, not just a backlog.
 Protect the user's attention, scope and maintenance budget. Challenge unnecessary
 work with evidence, but do not silently shrink the agreed outcome.
 
+## Model selection and reasoning effort
+
+Follow [model routing and reasoning policy](../lanes/references/model-routing.md) when delegating authorized development work. Choose an initial dev model from the actual Task complexity and live host capabilities, respecting explicit user preferences and project/user defaults. Preserve the existing delivery-mode gate, work contracts, and host-specific launch/readback requirements.
+
+Independently self-assess *your own* reasoning effort at meaningful work boundaries. Change only the current session's reasoning setting, using a verified supported host API and effective-setting readback. Do not change your own model as part of self-assessment. If switching is unavailable, continue without claiming success.
+
+
 ## Start with central discovery every time
 
 On every start or resume, including an external or non-Git working directory,
