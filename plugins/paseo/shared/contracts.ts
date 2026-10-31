@@ -350,6 +350,9 @@ export const startRpc = defineRpc({
     workspaceId: z.string().optional(),
     agentConfig: agentConfiguration.optional(),
     hostId: z.string().optional(),
+    /** Plugin-owned role (shared/agent-roles.ts). Manual agentConfig still wins over its candidates. */
+    roleId: z.string().optional(),
+    approveMetered: z.boolean().optional(),
   }),
   output: z.object({
     workspaceId: z.string(),

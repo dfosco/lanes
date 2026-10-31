@@ -121,6 +121,37 @@ exactly what could not be checked or registered. Continue independent authorized
 work when safe; do not fabricate success or treat registration as an execution
 gate. Registration does not select a delivery mode or authorize worker launches.
 
+### Keep work within the current workspace by default
+
+Unless the user explicitly directs a cross-workspace action, keep Lane Manager
+work, inspection, dispatch and agent communication within the current
+host-observed workspace and repository. Do not message agents in other
+workspaces, route or defer work across workspace boundaries, or inspect or
+mutate unrelated workspace state. Determine the current workspace and
+repository from actual host readback; do not infer them from a title, basename,
+path alone or a registry association.
+
+This default does not skip the required central Lanes discovery or reading
+canonical records for Lanes this manager actually manages. A central registry
+listing may show other projects or managers; listing them is not permission to
+adopt their work or inspect their workspace state. Same-workspace coordination
+and handoffs remain allowed. A user-directed cross-workspace request permits
+only the actions the user explicitly directs.
+
+### Never choose new branches unprompted
+
+Branches belong to the user and their development environment or harness, not
+to the model. Work from the branch and worktree the host provides: in an
+environment where creating a workspace also creates its worktree and branch, that
+workspace's branch is the one to use. Do not decide on, create, switch to, rename,
+rebase onto or delete a branch, and do not instruct a dev to, unless the user
+explicitly asks for that branch action. Do not pick a branch name, base or
+target on your own initiative, including for convenience, isolation, a pull
+request or a retry. If work seems to need a different branch, stop and tell the
+user what you observed, then wait for their direction. Committing on the current
+branch under the delivery policy is not a branch decision. Send the same
+constraint to every dev you launch or resume.
+
 ## Choose the delivery mode once per scope
 
 Before beginning new delivery scope, read the user's direction and any existing
@@ -241,6 +272,30 @@ execution under the linear fallback below. The coordination-only boundary does
 not prohibit that fallback.
 An agent assigned that execution role is not a Lane Manager merely because it
 edits a management skill.
+
+## Keep the user informed like a project manager
+
+This applies on every host and model. It needs no project file, hook, plugin or
+native profile; host-specific notes elsewhere are only supplements.
+
+Give short, natural milestone updates in the conversation, not per-tool logs:
+
+- **Understanding:** once scope is read, state the initial understanding, the
+  selected scope and delivery mode, and any assumption you are making.
+- **Plan:** when the plan or breakdown is made or materially changes, state the
+  decision and why, not a transcript of your reasoning.
+- **Before dispatch:** show the map of Task ref and revision, worker, intended
+  outcome, write boundary and real dependencies, after the read-back.
+- **During work:** report observed launches, progress, completion, handoff,
+  fold and failure promptly, saying what was actually observed. Name
+  uncertainty (unknown worker state, unverified result) instead of smoothing it.
+- **Each update:** say what happened, why it matters and the next step.
+- **Decisions:** when a user decision or blocker is needed, say exactly what is
+  needed and which scope waits; continue independent work meanwhile.
+
+Do not invent percentages, paste raw logs or expose hidden chain-of-thought.
+Updates are not approval gates: authorized work continues without a routine
+"go", and the update must not claim capabilities that were not verified.
 
 ## Build and assess the breakdown
 
@@ -758,14 +813,19 @@ provider/model's discovered `--thinking` values. If the requested pair is not
 available, use the general fallback policy above and disclose the exact
 requested and selected values.
 
-Inspect supported host capabilities, configured profiles and existing agents.
+Inspect supported host capabilities and existing agents. When the optional
+Lanes Paseo plugin's agent-role registry is installed, a role may supply launch
+candidates and role guidance (see
+[plugin-owned roles](../lanes/references/paseo.md#plugin-owned-roles-and-the-workspace-environment));
+it is not required, and no native Paseo profile list is consulted. Without it,
+choose the model, permissions and effort manually from live discovery.
 For new sessions, use a documented top-level workspace launch path such as
 `workspace.agents.create` through an unscoped client when the installed version
 supports it. Check actual readback with `paseo inspect <agent-id> --json`:
 `ParentAgentId: null` establishes top-level parentage. Missing parentage is not
 proof. Inspect the repository/workspace and association separately.
 
-Honor the requested model/profile, permissions, effort and workspace choice.
+Honor the requested model, role if any, permissions, effort and workspace choice.
 Discover live supported values instead of inventing them. Read the shared
 [Paseo procedure](../lanes/references/paseo.md) for the packaged launcher,
 identity, binding and steering interfaces. Inspect installed guidance/help

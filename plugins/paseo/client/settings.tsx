@@ -11,15 +11,18 @@ import {
 } from "../shared/contracts";
 import { FULL_ACCESS_MODE } from "../shared/permission-modes";
 import { AgentConfigFields } from "./agent-configuration";
+import { AgentRolesSettings } from "./agent-roles";
+import { LaneEnvironmentSettings } from "./lane-environment";
 import { ResourceSettings } from "./resource-settings";
 import { SortableOrderEditor } from "./sortable-order";
 import { defaultProvider } from "../shared/work";
 
 type Theme = PluginSurfaceProps["theme"];
-type Section = "resources" | "routing" | AgentRole;
+type Section = "resources" | "routing" | "environment" | "agent-roles" | AgentRole;
 
 function Nav({ section, setSection, theme }: { section: Section; setSection: (section: Section) => void; theme: Theme }) {
-  const items: [Section, string][] = [["manager", "Lane Manager"], ["dev", "Lane Dev"], ["routing", "Routing"], ["resources", "Resources"]];
+  const items: [Section, string][] = [["environment", "Workspace mode"], ["agent-roles", "Agent roles"],
+    ["manager", "Lane Manager"], ["dev", "Lane Dev"], ["routing", "Routing"], ["resources", "Resources"]];
   return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
     {items.map(([value, label]) => <Pressable key={value} accessibilityRole="button" onPress={() => setSection(value)}
       style={{ borderWidth: 1, borderColor: section === value ? theme.colors.accent : theme.colors.border,
@@ -242,6 +245,8 @@ export function SettingsScreen({ theme, host }: PluginSurfaceProps) {
   return <View style={{ padding: 12, gap: 8 }}>
     <Nav section={section} setSection={setSection} theme={theme} />
     {section === "resources" ? <ResourceSettings key={host.id} theme={theme} hostId={host.id} />
+      : section === "environment" ? <LaneEnvironmentSettings key={host.id} theme={theme} hostId={host.id} />
+        : section === "agent-roles" ? <AgentRolesSettings key={host.id} theme={theme} host={host} />
       : settings.status === "loading" ? <ActivityIndicator color={theme.colors.foregroundMuted} />
         : settings.status === "error" || settings.status === "invalid"
           ? <Text style={{ color: theme.colors.statusDanger }}>Lanes settings unavailable: {settings.error}</Text>

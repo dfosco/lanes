@@ -12,6 +12,7 @@ import {
 } from "../shared/contracts";
 import { executionFor, executionForManagers, isActiveAgent, type AgentInfo, type Execution } from "../shared/work";
 import { AgentLaunchDialog } from "./agent-configuration";
+import { LaneWorkspaceControls } from "./lane-environment";
 import { ReviewInbox } from "./review-inbox";
 import { ReviewDocument } from "./review-document";
 import { AttachmentDocument } from "./attachment-document";
@@ -804,9 +805,9 @@ export function WorkScreen({
   const runningAgentCount = uniqueRunningAgentCount(runningCountExecutions);
 
   const create = useMutation({
-    mutationFn: ({ ref, mode, workspaceId, agentConfig }: {
-      ref: string; mode: StartMode; workspaceId?: string; agentConfig?: AgentConfiguration;
-    }) => launch({ projectId: projectId!, ref, mode, workspaceId, agentConfig, hostId: host.id }),
+    mutationFn: ({ ref, mode, workspaceId, agentConfig, roleId, approveMetered }: {
+      ref: string; mode: StartMode; workspaceId?: string; agentConfig?: AgentConfiguration; roleId?: string; approveMetered?: boolean;
+    }) => launch({ projectId: projectId!, ref, mode, workspaceId, agentConfig, roleId, approveMetered, hostId: host.id }),
     onMutate: ({ ref }) => {
       setPending(ref);
       return { hostId: host.id, projectId, lane: board.data?.lanes.find((lane) => lane.ref === ref), navigation, onOpenLanePanel };
@@ -884,9 +885,9 @@ export function WorkScreen({
     setLaunchRequest({ ref, title: target?.title ?? ref, ...(workspaceId ? { workspaceId } : {}) });
   };
 
-  const startWithConfig = (agentConfig: AgentConfiguration) => {
+  const startWithConfig = (agentConfig?: AgentConfiguration, roleId?: string, approveMetered?: boolean) => {
     if (!launchRequest) return;
-    create.mutate({ ref: launchRequest.ref, mode: "agent", workspaceId: launchRequest.workspaceId, agentConfig });
+    create.mutate({ ref: launchRequest.ref, mode: "agent", workspaceId: launchRequest.workspaceId, agentConfig, roleId, approveMetered });
   };
 
   const hit = (work: Work) => !query || [work.title, work.ref, work.description, ...(work.labels ?? []).map((label) => label.name)].some((v) => v.toLowerCase().includes(query));
@@ -1066,6 +1067,7 @@ export function WorkScreen({
           </Pressable>
         ) : null}
       </View>
+      {currentWorkspaceId ? <LaneWorkspaceControls theme={theme} hostId={host.id} workspaceId={currentWorkspaceId} /> : null}
       {reviewInboxOpen ? <ReviewInbox theme={theme} initialProjectId={project?.projectId} /> : <>
       {laneInFocus ? <RecordContext key={laneInFocus.ref} work={laneInFocus} theme={theme} /> : null}
       {laneInFocus && projectId ? <RecordAttachments
@@ -1307,6 +1309,7 @@ export function WorkScreen({
             open={Boolean(launchRequest)}
             workTitle={launchRequest ? `${launchRequest.ref} · ${launchRequest.title}` : ""}
             defaults={launchDefaults}
+            defaultRoleId={launchRole === "manager" ? "lane-manager" : "lane-dev"}
             defaultsError={launchRoleDefaults.isError ? `Role defaults unavailable: ${message(launchRoleDefaults.error)}` : null}
             theme={theme}
             hostId={host.id}

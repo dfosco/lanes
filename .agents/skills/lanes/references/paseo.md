@@ -166,9 +166,11 @@ Continue a suitable top-level owner only within its current still-active bounded
 assignment. An explicit provider-continuation request may require replacing its
 managed running devs as described above. Fold the owner promptly when its
 assignment ends; new work after completion needs a fresh authorized owner.
-Discover configured profiles and their notes. Materialize the requested
-provider/model, permission mode, thinking and feature values; if no profile fits,
-discover live capabilities and report the fallback rather than guessing values.
+Materialize the requested provider/model, permission mode, thinking and feature
+values from live discovery. An optional plugin-owned role can supply ordered
+candidates (see [plugin-owned roles](#plugin-owned-roles-and-the-workspace-environment));
+without one, or when no candidate is eligible, report the fallback rather than
+guessing values. Native Paseo profiles are not a required input.
 Workspace choice follows the request/settings, not a universal isolation default.
 
 For a new manager, read `lane_manager_model` and
@@ -328,6 +330,72 @@ close operation under the same [normal and critical folding policy](delivery.md#
 If this installed version lacks the resource channel, use the documented
 fallback capacity and core `lanes handoff record` before supported native
 closure. Do not invent commands or claim an unavailable live service.
+
+## Plugin-owned roles and the workspace environment
+
+The optional Lanes Paseo plugin keeps its own role definitions in host-scoped
+plugin settings. A role is not a native Paseo profile, and this procedure never
+reads native profiles. A role has three parts: optional instructions, optional
+skill references, and an ordered list of launch candidates (exact `provider/model`
+IDs with thinking, mode and feature values). Presets such as `deep-reasoning`
+and `fast-implementation` have candidates only.
+
+Status: the role registry (validated CRUD, the candidate resolver and prompt
+composition) is still being implemented. Until it lands, do not treat ordered
+candidate resolution, role-guided launches or skill loading as delivered. The
+manual launch path is unchanged, and it remains the only verified launch route.
+
+Role guidance is not yet delivered to any session. Do not describe a launched
+session as carrying role instructions. Manual launch options always win over role
+candidates when the registry lands.
+
+### Workspace Lanes environment
+
+Workspace activation is plugin-owned and per host. The host settings
+`lane-environment` (version 1) provide:
+
+- `activateNewWorkspaces` (default true) and `firstAgentManager` (default true);
+- `titleMode` (`emoji-topic` by default, or `role-name`) and `roleEmojis`;
+- per-workspace `enabled` overrides, saved explicitly by the user.
+
+Verified facts of the committed plugin behavior:
+
+- Activation is per host. Existing workspaces are not adopted when the plugin
+  reloads. Nothing is written to `AGENTS.md` or any project file.
+- First-agent manager election is serialized within one daemon process. It is
+  not a host-wide atomic compare-and-set. It fires for any first agent created in
+  an activated workspace, including backend launches, not only for agents the user
+  creates in the UI.
+- Explicit manager assignment and explicit continuation are exposed via RPCs
+  (`clips.lane-environment.status`, `.assign-manager` and `.continue`) and client
+  controls in the plugin settings and composer. Activation settings are host-scoped.
+- Runtime state (the current manager, pending claims, continuation and demotion)
+  is kept in a Lanes-chosen state file. Paseo does not document a location for it,
+  so do not describe that location as Paseo-guaranteed.
+
+Manager continuation starts a new session in the same workspace and working
+directory, with the checkpoint in its initial prompt. It preserves the workspace,
+and the checkpoint and work references. It is not a native fork, a transcript
+clone or a provider switch, and no fork is detected: the host exposes no fork
+metadata to the plugin.
+
+While the Paseo TypeScript SDK agent handle lacks an in-process rename method,
+the public Paseo CLI (`paseo agent update --name <name>`) is available on the
+daemon host. On explicit manager assignment or continuation, the plugin uses
+the public CLI to apply the configured Manager title to the promoted session and
+a bracketed `[former Lane Manager] <topic>` title to the previous manager.
+This occurs only after same-daemon targeting is verified by comparing exact ID,
+workspace, normalized working directory, and current name across both SDK and CLI
+readbacks. Following the CLI update, readbacks from the refreshed SDK agent,
+CLI list, and CLI inspect must all agree; if targeting or verification fails,
+the plugin rolls back already-modified titles where safely possible and reports
+explicit per-title applied and error status. Without same-daemon verification or
+public CLI availability, operations fail closed and titles remain unchanged.
+
+Known limitations: live daemon end-to-end execution and continuation idempotency
+have not been exercised against a running Paseo instance; the plugin behavior
+is validated in automated test suites with test fakes. No live plugin install or
+daemon reload has been executed.
 
 ## When Paseo is absent
 

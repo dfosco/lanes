@@ -6,11 +6,13 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Switch, Text, View } from "react-native";
 import { agentOptionsRpc, type AgentConfiguration } from "../shared/contracts";
+import { rolesListRpc } from "../shared/agent-roles";
 import {
   FULL_ACCESS_MODE, RESTRICTED_MODE, fullAccessModeId, restrictedAccessModeId,
 } from "../shared/permission-modes";
 import { defaultProvider } from "../shared/work";
 import { agentOptionsTarget } from "./agent-options";
+import { modelDisplayName, providerDisplayName } from "./catalog-labels";
 
 type Theme = PluginSurfaceProps["theme"];
 type FeatureValue = string | boolean;
@@ -56,16 +58,18 @@ export function AgentConfigFields({
     queryFn: async () => (await paseo.providers.snapshot()).entries,
   });
   const entries = catalog.data ?? [];
-  const modelOptions = entries
-    .filter((entry) => entry.status === "ready" && entry.enabled !== false && (!providerId || entry.provider === providerId))
-    .flatMap((entry) => (entry.models ?? [])
-      .filter((model) => model.isSelectable !== false)
-      .map((model) => ({
-        value: providerId ? model.id : `${entry.provider}/${model.id}`,
-        label: `${entry.label ?? entry.provider} · ${model.label ?? model.id}`,
-      })));
+  const readyEntries = entries.filter((entry) => entry.status === "ready" && entry.enabled !== false && (!providerId || entry.provider === providerId));
+  const modelOptions = readyEntries.flatMap((entry, providerIndex) => (entry.models ?? [])
+    .filter((model) => model.isSelectable !== false)
+    .map((model, modelIndex) => {
+      const providerLabel = providerDisplayName(entry.label, entry.provider, providerIndex);
+      const modelLabel = modelDisplayName(model.label, model.id, entry.provider, modelIndex);
+      return { value: providerId ? model.id : `${entry.provider}/${model.id}`, label: `${providerLabel} · ${modelLabel}` };
+    }));
   const effectiveAgent = agentOptionsTarget(providerId, agent, defaultProvider(entries), modelOptions.map((option) => option.value));
   const scopedAgent = providerId && effectiveAgent ? effectiveAgent.slice(providerId.length + 1) : providerId ? "" : agent;
+  const effectiveAgentLabel = modelOptions.find((option) => option.value === (providerId ? scopedAgent : effectiveAgent))?.label ??
+    (effectiveAgent ? "Previously saved model" : "selected model");
   const activeThinking = thinkingOptionId || "";
   const optionsQuery = useQuery({
     queryKey: ["clips-agent-options", hostId, projectId ?? "default", effectiveAgent, activeThinking],
@@ -117,7 +121,7 @@ export function AgentConfigFields({
   ];
   const selectedModel = providerId ? scopedAgent : agent;
   if (selectedModel && !modelOptions.some((option) => option.value === selectedModel)) {
-    selectOptions.push({ value: selectedModel, label: `${selectedModel} (currently unavailable)` });
+    selectOptions.push({ value: selectedModel, label: "Previously saved model (currently unavailable)" });
   }
   const defaultThinking = options?.defaultThinkingOptionId ?? "";
   const selectedSpeed = speedFeature
@@ -148,7 +152,7 @@ export function AgentConfigFields({
       {optionsQuery.isFetching ? <ActivityIndicator color={theme.colors.foregroundMuted} /> : null}
       {optionsQuery.isError ? (
         <Text style={{ color: theme.colors.statusDanger, fontSize: 12 }}>
-          Cannot read options for {effectiveAgent}: {optionsQuery.error instanceof Error ? optionsQuery.error.message : String(optionsQuery.error)}
+          Cannot read options for {effectiveAgentLabel}: {optionsQuery.error instanceof Error ? optionsQuery.error.message : String(optionsQuery.error)}
         </Text>
       ) : null}
       {providerId && !selectedModel ? (
@@ -221,7 +225,7 @@ export function AgentConfigFields({
 }
 
 export function AgentLaunchDialog({
-  open, workTitle, defaults, defaultsError, theme, hostId, projectId, busy, onOpenChange, onSubmit,
+  open, workTitle, defaults, defaultsError, theme, hostId, projectId, busy, defaultRoleId, onOpenChange, onSubmit,
 }: {
   open: boolean;
   workTitle: string;
@@ -231,10 +235,13 @@ export function AgentLaunchDialog({
   hostId: string;
   projectId?: string;
   busy: boolean;
+  defaultRoleId?: string;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (config: AgentConfiguration) => void;
+  onSubmit: (config?: AgentConfiguration, roleId?: string, approveMetered?: boolean) => void;
 }) {
   const paseo = usePaseo();
+  const fetchRoles = useRpc(rolesListRpc);
+  const rolesQuery = useQuery({ queryKey: ["clips.agent-roles.list", hostId], queryFn: () => fetchRoles({}), enabled: Boolean(hostId) });
   const catalog = useQuery({
     queryKey: ["clips-agent-catalog", hostId],
     queryFn: async () => (await paseo.providers.snapshot()).entries,
@@ -244,6 +251,9 @@ export function AgentLaunchDialog({
   const [thinkingOptionId, setThinkingOptionId] = useState(defaults.thinkingOptionId);
   const [featureValues, setFeatureValues] = useState<Record<string, FeatureValue>>(defaults.featureValues);
   const [modeId, setModeId] = useState(defaults.modeId || FULL_ACCESS_MODE);
+  const [roleId, setRoleId] = useState(defaultRoleId ?? "");
+  const [manualConfiguration, setManualConfiguration] = useState(!defaultRoleId);
+  const [approveMetered, setApproveMetered] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -251,7 +261,14 @@ export function AgentLaunchDialog({
     setThinkingOptionId(defaults.thinkingOptionId);
     setFeatureValues(defaults.featureValues);
     setModeId(defaults.modeId || FULL_ACCESS_MODE);
-  }, [open, defaults.agent, defaults.thinkingOptionId, defaults.featureValues, defaults.modeId, fallbackAgent]);
+    setRoleId(defaultRoleId ?? "");
+    setManualConfiguration(!defaultRoleId);
+    setApproveMetered(false);
+  }, [open, defaults.agent, defaults.thinkingOptionId, defaults.featureValues, defaults.modeId, fallbackAgent, defaultRoleId]);
+
+  const selectedRole = rolesQuery.data?.roles.find((role) => role.id === roleId);
+  const canUseRole = Boolean(roleId && selectedRole);
+  const canStart = manualConfiguration ? Boolean(agent) : canUseRole;
 
   return (
     <Modal title="Configure agent" open={open} onOpenChange={onOpenChange}>
@@ -262,30 +279,54 @@ export function AgentLaunchDialog({
             These choices apply to this new session. They do not change Lanes settings.
           </Text>
           {defaultsError ? <Text style={{ color: theme.colors.statusDanger, fontSize: 12 }}>{defaultsError}</Text> : null}
-          <AgentConfigFields
-            theme={theme}
-            hostId={hostId}
-            projectId={projectId}
-            agent={agent}
-            thinkingOptionId={thinkingOptionId}
-            featureValues={featureValues}
-            onAgentChange={setAgent}
-            onThinkingChange={setThinkingOptionId}
-            onFeatureValuesChange={setFeatureValues}
-            modeId={modeId}
-            onModeChange={setModeId}
-            allowAutomatic={false}
-          />
+          {rolesQuery.isLoading ? <ActivityIndicator color={theme.colors.foregroundMuted} /> : null}
+          {rolesQuery.isError ? <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>
+            Saved roles could not be read from this host. Manual launch remains available.
+          </Text> : null}
+          <SettingsSelect label="Launch as" value={roleId} options={[
+            { value: "", label: "Manual launch" },
+            ...(rolesQuery.data?.roles ?? []).map((role) => ({ value: role.id, label: `${role.name}${role.candidates.length ? ` · ${role.candidates.length} ordered choices` : ""}` })),
+          ]} onValueChange={(value) => { setRoleId(value); setManualConfiguration(!value); setApproveMetered(false); }} />
+          {roleId && selectedRole ? <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>
+            {selectedRole.description || "The host resolves this role’s ordered launch choices and adds its instructions/skills to the new session."}
+            {selectedRole.candidates.length ? ` · First preference: ${selectedRole.candidates.length} saved choice${selectedRole.candidates.length === 1 ? "" : "s"}.` : " · Uses the configured role defaults."}
+          </Text> : null}
+          {roleId ? <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <Switch value={manualConfiguration} onValueChange={(value) => {
+              setManualConfiguration(value);
+              if (value) setApproveMetered(false);
+            }}
+              trackColor={{ false: theme.colors.border, true: theme.colors.accent }} />
+            <Text style={{ color: theme.colors.foreground, fontSize: 12, flex: 1 }}>Override this role with manual provider, model, and permission options</Text>
+          </View> : null}
+          {selectedRole?.candidates.some((candidate) => candidate.metered) && !manualConfiguration ? <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <Switch value={approveMetered} onValueChange={setApproveMetered}
+              trackColor={{ false: theme.colors.border, true: theme.colors.accent }} />
+            <Text style={{ color: theme.colors.foreground, fontSize: 12, flex: 1 }}>
+              Approve paid/metered fallback for this launch only
+            </Text>
+          </View> : null}
+          {manualConfiguration ? <AgentConfigFields
+              theme={theme}
+              hostId={hostId}
+              projectId={projectId}
+              agent={agent}
+              thinkingOptionId={thinkingOptionId}
+              featureValues={featureValues}
+              onAgentChange={setAgent}
+              onThinkingChange={setThinkingOptionId}
+              onFeatureValuesChange={setFeatureValues}
+              modeId={modeId}
+              onModeChange={setModeId}
+              allowAutomatic={false}
+            /> : null}
         </ScrollView>
         <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, paddingTop: 12 }}>
           <DialogButton label="Cancel" theme={theme} disabled={busy} onPress={() => onOpenChange(false)} subtle />
-          <DialogButton label={busy ? "Starting…" : "Start agent"} theme={theme} disabled={busy || !agent}
-            onPress={() => onSubmit({
-              provider: agent,
-              thinkingOptionId: thinkingOptionId || undefined,
-              featureValues,
-              modeId,
-            })} />
+          <DialogButton label={busy ? "Starting…" : "Start agent"} theme={theme} disabled={busy || !canStart}
+            onPress={() => onSubmit(manualConfiguration ? {
+              provider: agent, thinkingOptionId: thinkingOptionId || undefined, featureValues, modeId,
+            } : undefined, roleId || undefined, approveMetered)} />
         </View>
       </Modal.Content>
     </Modal>

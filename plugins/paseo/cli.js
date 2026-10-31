@@ -44,6 +44,9 @@ Options:
   --workspace <id>             Add the agent to an existing workspace
   --base <branch>              Base branch for a new worktree; defaults to current branch
   --host-id <observed-id>       Required for Lane manager starts; same host ID shown by the app
+  --role <id>                  Launch with a plugin-owned role (ordered live candidates)
+  --approve-metered            Approve a metered role candidate for this launch only
+  --plugin-id <id>             Plugin ID for role RPCs (default: this checkout's paseo-plugin.json; or LANES_PAESO_PLUGIN_ID)
   --title <text>               Agent title
   --url <ws-url>               Paseo daemon WebSocket URL (default ws://127.0.0.1:6767/ws)
   --json                       Print structured output
@@ -60,7 +63,7 @@ function parseArgs(argv) {
   while (argv.length) {
     const flag = argv.shift();
     if (flag === "--help" || flag === "-h") return { command: "help", options };
-    if (flag === "--json" || flag === "--dry-run" || flag === "--watch") {
+    if (flag === "--json" || flag === "--dry-run" || flag === "--watch" || flag === "--approve-metered") {
       options[flag.slice(2)] = true;
       continue;
     }
@@ -278,34 +281,17 @@ function managerCommand(root, action, ref, request) {
   return JSON.parse(execFileSync(cli.bin, args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
 }
 
-export async function start(client, options) {
+export async function start(client, options, driver) {
   // Dry-run is read-only. Live launches share the daemon handler's repository/ref lock.
-  if (options["dry-run"]) return startUnlocked(client, options);
+  if (options["dry-run"]) return startUnlocked(client, options, driver);
   const root = path.resolve(options.project ?? process.cwd());
   if (!options.ref) fail("start requires --ref <lanes-ref>.");
   const release = acquireLaunchLock(root, options.ref);
-  try { return await startUnlocked(client, options); }
+  try { return await startUnlocked(client, options, driver); }
   finally { release(); }
 }
 
-async function startUnlocked(client, options) {
-  const root = path.resolve(options.project ?? process.cwd());
-  const ref = options.ref;
-  const agent = options.provider;
-  if (!ref) fail("start requires --ref <lanes-ref>.");
-  if (!agent?.includes("/")) fail("start requires an exact --provider <provider/model> value.");
-
-  const board = readBoard(root);
-  const target = findTarget(board, ref);
-  if (!target) fail(`Lanes reference ${ref} does not exist in ${root}.`);
-  if (["closed", "not_planned", "duplicate"].includes(target.status)) {
-    fail(`${ref} is ${target.status}; reopen it in Lanes before starting an agent.`);
-  }
-  const managerClaim = target.kind === "lane" ? managerCommand(root, "inspect", ref) : null;
-  if (managerClaim) {
-    assertUnclaimed(managerClaim);
-    if (!options["host-id"]?.trim()) fail("Lane manager starts require --host-id <observed-host-id>, including --dry-run. Use the same observed Paseo host ID as the app, never a URL or hostname guess.");
-  }
+async function manualLaunch(client, root, options, target, agent) {
   const prompt = promptFor(target);
   const { provider, model: modelId } = splitProvider(agent);
   const snapshot = await client.providers.snapshot({ cwd: root });
@@ -352,8 +338,58 @@ async function startUnlocked(client, options) {
     ...(options.thinking ? { thinkingOptionId: options.thinking } : {}),
     ...(Object.keys(featureValues).length ? { featureValues } : {}),
   };
+  return { prompt, config };
+}
 
+/** Role launches are validated, ordered and composed by the plugin host; the CLI never copies its rules. */
+function pluginIdFor(options) {
+  const explicit = (options["plugin-id"] || process.env.LANES_PAESO_PLUGIN_ID || "").trim();
+  if (explicit) return explicit;
+  return JSON.parse(readFileSync(path.join(pluginRoot, "paseo-plugin.json"), "utf8")).id;
+}
+
+async function roleLaunch(driver, root, projectId, target, agent, options) {
+  if (!driver?.invokePluginRpc) fail("Role launches need the Paseo daemon connection.");
+  const featureValues = parseFeatureValues(options.features);
+  const resolution = await driver.invokePluginRpc(pluginIdFor(options), "clips.agent-roles.resolve", {
+    roleId: options.role,
+    projectId,
+    workPrompt: promptFor(target),
+    ...(agent ? { agentConfig: {
+      provider: agent,
+      ...(options.thinking ? { thinkingOptionId: options.thinking } : {}),
+      ...(options.mode || options.permission ? { modeId: options.mode ?? options.permission } : {}),
+      featureValues,
+    } } : {}),
+    ...(options["approve-metered"] ? { approveMetered: true } : {}),
+  });
+  return { config: resolution.config, prompt: resolution.prompt, roleResolution: resolution };
+}
+
+async function startUnlocked(client, options, driver) {
+  const root = path.resolve(options.project ?? process.cwd());
+  const ref = options.ref;
+  const agent = options.provider;
+  if (!ref) fail("start requires --ref <lanes-ref>.");
+  if (!options.role && !agent?.includes("/")) fail("start requires an exact --provider <provider/model> value, or --role <id>.");
+  if (options.role && options.speed) fail("--speed is not supported with --role; pass the provider feature with --feature id=value.");
+
+  const board = readBoard(root);
+  const target = findTarget(board, ref);
+  if (!target) fail(`Lanes reference ${ref} does not exist in ${root}.`);
+  if (["closed", "not_planned", "duplicate"].includes(target.status)) {
+    fail(`${ref} is ${target.status}; reopen it in Lanes before starting an agent.`);
+  }
+  const managerClaim = target.kind === "lane" ? managerCommand(root, "inspect", ref) : null;
+  if (managerClaim) {
+    assertUnclaimed(managerClaim);
+    if (!options["host-id"]?.trim()) fail("Lane manager starts require --host-id <observed-host-id>, including --dry-run. Use the same observed Paseo host ID as the app, never a URL or hostname guess.");
+  }
+  const manual = options.role ? null : await manualLaunch(client, root, options, target, agent);
   const projectIds = await clipsProjectIds(client, root);
+  const { config, prompt, roleResolution } = manual
+    ? { ...manual, roleResolution: null }
+    : await roleLaunch(driver, root, projectIds[0], target, agent, options);
   const [workspaces, agents] = await Promise.all([allWorkspaces(client), allAgents(client)]);
   let workspace;
   if (options.workspace) {
@@ -402,6 +438,11 @@ async function startUnlocked(client, options) {
     labels: { "clips.ref": ref, "clips.projectId": projectIds[0], "clips.kind": target.kind },
     prompt,
     ...(managerClaim ? { managerClaim, hostId: options["host-id"] } : {}),
+    ...(roleResolution ? { role: {
+      id: roleResolution.role.id, name: roleResolution.role.name, revision: roleResolution.role.revision,
+      source: roleResolution.source, selectedIndex: roleResolution.selectedIndex,
+      composition: roleResolution.composition, attempts: roleResolution.attempts,
+    } } : {}),
   };
   if (options["dry-run"]) return plan;
 
@@ -501,7 +542,7 @@ async function main() {
       print(result, true);
       return;
     }
-    const result = await start(client, options);
+    const result = await start(client, options, driver);
     if (options["dry-run"]) {
       print(result, true);
       return;

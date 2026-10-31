@@ -3,6 +3,9 @@ import fs from "node:fs";
 import { findClips, type ClipsCommand as Cli } from "./clips-cli";
 import { assertUnclaimed, launchLaneManager } from "./lane-managers";
 import { acquireLaunchLock } from "./launch-lock";
+import { resolveRoleLaunch } from "./agent-roles";
+import { loadAgentRoles } from "./agent-role-source";
+import type { AgentRoleDefinition, RoleResolution } from "../shared/agent-roles";
 import type { ManagerClaim } from "./lane-managers";
 import os from "node:os";
 import path from "node:path";
@@ -785,6 +788,32 @@ async function agentConfiguration(
   };
 }
 
+/**
+ * Role launch through the existing validator. Candidate, defaults and manual paths all call agentConfiguration,
+ * so provider/model/mode/feature checks stay in one place.
+ */
+export async function roleLaunch(paseo: Paseo, prefs: Preferences, input: {
+  root: string; projectId: string; kind: AgentRole; roleId: string; workPrompt: string;
+  agentConfig?: AgentConfiguration; approveMetered?: boolean; roles?: readonly AgentRoleDefinition[];
+}): Promise<RoleResolution> {
+  const roles = input.roles ?? (await loadAgentRoles()).roles;
+  const rolePreferences = prefs.roles[input.kind];
+  return resolveRoleLaunch({
+    paseo, roles, roleId: input.roleId, cwd: input.root,
+    baselineModeId: rolePreferences.modeId || prefs.modeId || FULL_ACCESS_MODE,
+    configure: (override) => agentConfiguration(paseo, input.root, prefs, override, input.kind, input.projectId),
+    workPrompt: input.workPrompt,
+    agentConfig: input.agentConfig,
+    approveMetered: input.approveMetered,
+  });
+}
+
+type LaunchChoice = {
+  config: { provider: string; modeId: string; thinkingOptionId?: string; featureValues?: Record<string, boolean | string>; systemPrompt?: string };
+  prompt: string;
+  role: RoleResolution | null;
+};
+
 const inFlight = new Set<string>();
 
 /**
@@ -794,7 +823,10 @@ const inFlight = new Set<string>();
 export async function startWork(
   paseo: Paseo,
   prefs: Preferences,
-  input: { projectId: string; ref: string; mode: StartMode; workspaceId?: string; agentConfig?: AgentConfiguration; hostId?: string },
+  input: {
+    projectId: string; ref: string; mode: StartMode; workspaceId?: string; agentConfig?: AgentConfiguration; hostId?: string;
+    roleId?: string; approveMetered?: boolean;
+  },
 ) {
   const project = await findProject(paseo, input.projectId);
   const key = `${project.root}:${input.ref}`;
@@ -818,11 +850,24 @@ export async function startWork(
         throw new Error("A Lane manager launch requires the observed Paseo host ID.");
       }
     }
-    const createAgent = async (workspace: ReturnType<Paseo["workspaces"]["ref"]>, config: Awaited<ReturnType<typeof agentConfiguration>>) => {
-      const options = { config, labels: { "clips.ref": target.ref, "clips.projectId": project.projectId, "clips.kind": target.kind } };
-      if (!managerClaim) return workspace.agents.create({ ...options, prompt: promptFor(target) });
+    const roleKind: AgentRole = target.kind === "lane" ? "manager" : "dev";
+    if (input.roleId && input.mode !== "agent") throw new Error("Lanes roles launch an agent; choose agent mode.");
+    // One launch choice per agent: the manual/default configuration, or the resolved role with its composed prompt.
+    const chooseLaunch = async (): Promise<LaunchChoice> => {
+      if (!input.roleId) {
+        return { config: await agentConfiguration(paseo, project.root, prefs, input.agentConfig, roleKind, project.projectId), prompt: promptFor(target), role: null };
+      }
+      const role = await roleLaunch(paseo, prefs, {
+        root: project.root, projectId: project.projectId, kind: roleKind, roleId: input.roleId,
+        workPrompt: promptFor(target), agentConfig: input.agentConfig, approveMetered: input.approveMetered,
+      });
+      return { config: role.config, prompt: role.prompt ?? promptFor(target), role };
+    };
+    const createAgent = async (workspace: ReturnType<Paseo["workspaces"]["ref"]>, launch: LaunchChoice) => {
+      const options = { config: launch.config, labels: { "clips.ref": target.ref, "clips.projectId": project.projectId, "clips.kind": target.kind } };
+      if (!managerClaim) return workspace.agents.create({ ...options, prompt: launch.prompt });
       return launchLaneManager({
-        ref: target.ref, hostId: input.hostId!, claim: managerClaim, prompt: promptFor(target),
+        ref: target.ref, hostId: input.hostId!, claim: managerClaim, prompt: launch.prompt,
         createIdle: () => workspace.agents.create(options),
         claimOwner: (request) => laneManagerCommand(paseo, project.root, "claim", target.ref, request),
       });
@@ -846,34 +891,30 @@ export async function startWork(
       if (!workspace || !project.projectIds.includes(workspace.projectId)) {
         throw new Error("Choose a workspace that belongs to this Lanes project.");
       }
-      const config = await agentConfiguration(paseo, project.root, prefs, input.agentConfig,
-        target.kind === "lane" ? "manager" : "dev", project.projectId);
-      const created = await createAgent(paseo.workspaces.ref(workspace.id), config);
+      const launch = await chooseLaunch();
+      const created = await createAgent(paseo.workspaces.ref(workspace.id), launch);
       return {
         workspaceId: workspace.id, branch: workspace.branch, agentId: created.id,
-        agent: config.provider, reused: true, alreadyRunning: false,
+        agent: launch.config.provider, reused: true, alreadyRunning: false,
       };
     }
     // A configured provider is checked before any new workspace is created.
-    const config = input.mode === "agent" && running.status !== "running"
-      ? await agentConfiguration(paseo, project.root, prefs, input.agentConfig,
-        target.kind === "lane" ? "manager" : "dev", project.projectId) : null;
-    const prompt = config ? promptFor(target) : null;
+    const launch = input.mode === "agent" && running.status !== "running" ? await chooseLaunch() : null;
 
     const existing = running.workspaceId
       ? workspaces.find((w) => w.id === running.workspaceId)
       : workspaces.find((w) => matchesWorkspace(w, target, project.projectIds));
     if (existing || running.workspaceId) {
       const id = existing?.id || running.workspaceId!;
-      if (running.status === "running" || !config || !prompt) {
+      if (running.status === "running" || !launch) {
         return {
           workspaceId: id, branch: existing?.branch || branchName(target),
           agentId: null, agent: null, reused: true, alreadyRunning: running.status === "running",
         };
       }
       const workspace = paseo.workspaces.ref(id);
-      const created = await createAgent(workspace, config);
-      return { workspaceId: id, branch: existing?.branch || branchName(target), agentId: created.id, agent: config.provider, reused: true, alreadyRunning: false };
+      const created = await createAgent(workspace, launch);
+      return { workspaceId: id, branch: existing?.branch || branchName(target), agentId: created.id, agent: launch.config.provider, reused: true, alreadyRunning: false };
     }
 
     // Worktree remnants must not silently create another workspace on the same work.
@@ -909,12 +950,12 @@ export async function startWork(
         baseBranch,
       },
     });
-    if (!config || !prompt) {
+    if (!launch) {
       return { workspaceId: workspace.id, branch, agentId: null, agent: null, reused: false, alreadyRunning: false };
     }
     try {
-      const created = await createAgent(workspace, config);
-      return { workspaceId: workspace.id, branch, agentId: created.id, agent: config.provider, reused: false, alreadyRunning: false };
+      const created = await createAgent(workspace, launch);
+      return { workspaceId: workspace.id, branch, agentId: created.id, agent: launch.config.provider, reused: false, alreadyRunning: false };
     } catch (error) {
       throw new Error(`Workspace ${workspace.id} was created on ${branch}, but its agent could not start: ${errorText(error)}`);
     }
