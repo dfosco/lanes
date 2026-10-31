@@ -366,10 +366,9 @@ Verified facts of the committed plugin behavior:
   not a host-wide atomic compare-and-set. It fires for any first agent created in
   an activated workspace, including backend launches, not only for agents the user
   creates in the UI.
-- Explicit manager assignment and explicit continuation exist as RPCs only.
-  `clips.lane-environment.status`, `.assign-manager` and `.continue` are the
-  names; there is no UI for them yet and no activate RPC (activation goes through
-  settings).
+- Explicit manager assignment and explicit continuation are exposed via RPCs
+  (`clips.lane-environment.status`, `.assign-manager` and `.continue`) and client
+  controls in the plugin settings and composer. Activation settings are host-scoped.
 - Runtime state (the current manager, pending claims, continuation and demotion)
   is kept in a Lanes-chosen state file. Paseo does not document a location for it,
   so do not describe that location as Paseo-guaranteed.
@@ -378,13 +377,25 @@ Manager continuation starts a new session in the same workspace and working
 directory, with the checkpoint in its initial prompt. It preserves the workspace,
 and the checkpoint and work references. It is not a native fork, a transcript
 clone or a provider switch, and no fork is detected: the host exposes no fork
-metadata to the plugin. The previous manager keeps its existing title because
-the public SDK has no rename call. A `[former Lane Manager]` title is advisory
-only and must not be presented as a guaranteed rename.
+metadata to the plugin.
 
-Known limitations: role instruction delivery is not wired; recovery from a
-stale creation depends on the SDK `idempotencyKey`, which has not been verified
-live; the environment and continuation paths have no live tests yet.
+While the Paseo TypeScript SDK agent handle lacks an in-process rename method,
+the public Paseo CLI (`paseo agent update --name <name>`) is available on the
+daemon host. On explicit manager assignment or continuation, the plugin uses
+the public CLI to apply the configured Manager title to the promoted session and
+a bracketed `[former Lane Manager] <topic>` title to the previous manager.
+This occurs only after same-daemon targeting is verified by comparing exact ID,
+workspace, normalized working directory, and current name across both SDK and CLI
+readbacks. Following the CLI update, readbacks from the refreshed SDK agent,
+CLI list, and CLI inspect must all agree; if targeting or verification fails,
+the plugin rolls back already-modified titles where safely possible and reports
+explicit per-title applied and error status. Without same-daemon verification or
+public CLI availability, operations fail closed and titles remain unchanged.
+
+Known limitations: live daemon end-to-end execution and continuation idempotency
+have not been exercised against a running Paseo instance; the plugin behavior
+is validated in automated test suites with test fakes. No live plugin install or
+daemon reload has been executed.
 
 ## When Paseo is absent
 
