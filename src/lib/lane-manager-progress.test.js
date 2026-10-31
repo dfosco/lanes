@@ -35,8 +35,10 @@ describe('Lane Manager progress communication contract', () => {
     expect(body).not.toMatch(/paseo plugin|AGENTS\.md required/i);
   });
 
-  it('labels plugin role/activation material as proposed', () => {
-    expect(text(paseo)).toContain('not a claim that these features are implemented');
+  it('labels plugin role material as unshipped', () => {
+    expect(text(paseo)).toContain('is still being implemented');
+    expect(text(paseo)).toContain('do not treat ordered candidate resolution');
+    expect(text(paseo)).toContain('Role guidance is not yet delivered');
     expect(text(paseo)).toContain('Native Paseo profiles are not a required input');
   });
 });
