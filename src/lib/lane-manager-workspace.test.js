@@ -38,4 +38,21 @@ describe('Lane Manager workspace boundary contract', () => {
   it('remains host-agnostic rather than prescribing one host integration', () => {
     expect(boundary).not.toMatch(/Paseo|Copilot|OpenCode/);
   });
+
+  describe('branch ownership', () => {
+    const branches = section('Never choose new branches unprompted');
+
+    it('leaves branch decisions to the user and their environment', () => {
+      expect(branches).toContain('Branches belong to the user');
+      expect(branches).toContain("that workspace's branch is the one to use");
+      expect(branches).toContain('Do not decide on, create, switch to, rename, rebase onto or delete a branch');
+      expect(branches).toContain('unless the user explicitly asks for that branch action');
+      expect(branches).toContain('stop and tell the user what you observed');
+    });
+
+    it('allows commits on the current branch and carries the rule to devs', () => {
+      expect(branches).toContain('Committing on the current branch under the delivery policy is not a branch decision');
+      expect(branches).toContain('Send the same constraint to every dev you launch or resume');
+    });
+  });
 });

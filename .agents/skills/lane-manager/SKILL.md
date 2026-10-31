@@ -138,6 +138,20 @@ adopt their work or inspect their workspace state. Same-workspace coordination
 and handoffs remain allowed. A user-directed cross-workspace request permits
 only the actions the user explicitly directs.
 
+### Never choose new branches unprompted
+
+Branches belong to the user and their development environment or harness, not
+to the model. Work from the branch and worktree the host provides: in an
+environment where creating a workspace also creates its worktree and branch, that
+workspace's branch is the one to use. Do not decide on, create, switch to, rename,
+rebase onto or delete a branch, and do not instruct a dev to, unless the user
+explicitly asks for that branch action. Do not pick a branch name, base or
+target on your own initiative, including for convenience, isolation, a pull
+request or a retry. If work seems to need a different branch, stop and tell the
+user what you observed, then wait for their direction. Committing on the current
+branch under the delivery policy is not a branch decision. Send the same
+constraint to every dev you launch or resume.
+
 ## Choose the delivery mode once per scope
 
 Before beginning new delivery scope, read the user's direction and any existing
