@@ -10,6 +10,7 @@ import {
   FULL_ACCESS_MODE, RESTRICTED_MODE, fullAccessModeId, restrictedAccessModeId,
 } from "../shared/permission-modes";
 import { defaultProvider } from "../shared/work";
+import { agentOptionsTarget } from "./agent-options";
 
 type Theme = PluginSurfaceProps["theme"];
 type FeatureValue = string | boolean;
@@ -63,13 +64,14 @@ export function AgentConfigFields({
         value: providerId ? model.id : `${entry.provider}/${model.id}`,
         label: `${entry.label ?? entry.provider} · ${model.label ?? model.id}`,
       })));
-  const scopedAgent = providerId && agent.startsWith(`${providerId}/`) ? agent.slice(providerId.length + 1) : agent;
-  const effectiveAgent = providerId || agent || defaultProvider(entries);
+  const effectiveAgent = agentOptionsTarget(providerId, agent, defaultProvider(entries), modelOptions.map((option) => option.value));
+  const scopedAgent = providerId && effectiveAgent ? effectiveAgent.slice(providerId.length + 1) : providerId ? "" : agent;
   const activeThinking = thinkingOptionId || "";
   const optionsQuery = useQuery({
     queryKey: ["clips-agent-options", hostId, projectId ?? "default", effectiveAgent, activeThinking],
     queryFn: () => fetchAgentOptions({ projectId, provider: effectiveAgent!, thinkingOptionId: activeThinking || undefined }),
     enabled: Boolean(effectiveAgent),
+    retry: false,
   });
   const options = optionsQuery.data;
   const speedFeature = options?.speedFeature as ProviderFeature | null | undefined;
@@ -149,6 +151,11 @@ export function AgentConfigFields({
           Cannot read options for {effectiveAgent}: {optionsQuery.error instanceof Error ? optionsQuery.error.message : String(optionsQuery.error)}
         </Text>
       ) : null}
+      {providerId && !selectedModel ? (
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+          Select a default model to load model-specific reasoning and provider options.
+        </Text>
+      ) : null}
       {thinkingOptions.length ? (
         <SettingsSelect
           label="Thinking"
@@ -165,13 +172,13 @@ export function AgentConfigFields({
           onValueChange={onThinkingChange}
         />
       ) : null}
-      <SettingsSelect
+      {options ? <SettingsSelect
         label="Permission mode"
         hint="Full and restricted access resolve to modes published by the selected provider."
         value={selectedMode}
         options={permissionModeOptions}
         onValueChange={onModeChange}
-      />
+      /> : null}
       {options?.modeError ? (
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
           Paseo could not discover permission modes: {options.modeError}

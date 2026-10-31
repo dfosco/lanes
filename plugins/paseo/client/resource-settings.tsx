@@ -99,7 +99,7 @@ export function ResourceSettings({ theme, hostId }: { theme: Theme; hostId: stri
   if (settings.status === "loading") return <ActivityIndicator color={theme.colors.foregroundMuted} />;
   if (settings.status !== "ready") {
     return <SettingsSection title="Resource manager"><SettingsCard>
-      <View style={{ padding: 16, gap: 12 }}>
+      <View style={{ padding: 8, gap: 8 }}>
       <Text style={{ color: theme.colors.statusDanger }}>Resource settings unavailable: {settings.error}</Text>
       {error ? <Text style={{ color: theme.colors.statusDanger }}>{error}</Text> : null}
       <SettingsAction label="Resource settings" actionLabel="Reload settings" disabled={saving} onPress={() => void reload()} />
@@ -156,7 +156,7 @@ export function ResourceSettings({ theme, hostId }: { theme: Theme; hostId: stri
   return <View style={{ gap: 14 }}>
     <SettingsSection title="Resource manager">
       <SettingsCard>
-        <View style={{ padding: 16, gap: 12 }}>
+        <View style={{ padding: 8, gap: 8 }}>
         <SettingsSwitch label="Manage resource pressure" value={values.enabled} disabled={busy}
           hint="Coordinate live capacity and fold developers under pressure. Critical folds close immediately; normal folds preserve context first. Applies to this host."
           onValueChange={(enabled) => {
@@ -176,7 +176,7 @@ export function ResourceSettings({ theme, hostId }: { theme: Theme; hostId: stri
     </SettingsSection>
     <SettingsSection title="Pressure thresholds">
       <SettingsCard>
-        <View style={{ padding: 16, gap: 12 }}>
+        <View style={{ padding: 8, gap: 8 }}>
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>
           Percent of host capacity in use. For each resource, recovery must be below warning, and warning below critical.
           Pressure must persist across consecutive samples before managers are notified.
