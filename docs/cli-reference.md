@@ -912,7 +912,11 @@ to retry, dispatch that workflow with the existing tag. It validates the tag and
 package version, runs root and Paseo tests plus package smoke checks, and uses
 npm trusted publishing with OIDC provenance. A retry skips an existing npm
 version only when its tarball integrity matches the tag and the registry reports
-provenance. It creates GitHub release notes from the exact matching section in
+provenance, and a downloadable tarball whose bytes match the packed artifact.
+Fresh registry lookups wait up to ten minutes for metadata, provenance, and the
+tarball to propagate. An existing matching version with pending metadata is
+polled without another publish; identity or integrity mismatches fail immediately.
+The workflow creates GitHub release notes from the exact matching section in
 `CHANGELOG.md`. Do not publish locally with `npm publish`.
 
 ## License

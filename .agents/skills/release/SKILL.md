@@ -33,7 +33,7 @@ metadata:
    ```
 
    The workflow checks out the selected tag, rejects prerelease or mismatched tags, runs root tests and package smoke checks, then installs and checks the Paseo plugin. It publishes the single root package with npm trusted publishing and provenance using GitHub OIDC. The workflow has no npm token.
-6. The publish script handles retries. It skips an already published version only when the registry package identity and tarball integrity match the exact `.tgz` artifact packed from the tag and npm reports provenance. A mismatch or missing provenance stops the workflow; never overwrite or silently accept that version. After a successful publish or verified retry, the workflow creates GitHub release notes from the exact matching version section in `CHANGELOG.md` if they do not already exist.
+6. The publish script handles registry propagation and retries. It uses fresh registry lookups and waits up to ten minutes for the version metadata, provenance, and downloadable tarball to appear. A published version must match the package identity and packed tarball integrity; the downloaded tarball bytes must also hash to that integrity. If matching version metadata exists while provenance or the tarball is still propagating, wait without publishing the version again. Fail immediately on an identity or integrity mismatch. After publication is verified, the workflow creates GitHub release notes from the exact matching version section in `CHANGELOG.md` if they do not already exist.
 7. Report the tag, workflow run, npm version, and GitHub release. A successful workflow is the publication evidence.
 
 ## Guardrails
