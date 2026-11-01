@@ -357,6 +357,91 @@ describe("lane environment lifecycle", () => {
     expect(result.workspace.managerId).toBe("candidate");
   });
 
+  it("clears only the current planner after verifying the former-manager title", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "planner", workspaceId: "ws1", cwd: "/repo/one", title: "🧭 Ship it", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const file = path.join(dir, "state.json");
+    const store = createLaneEnvironmentStore(file);
+    const env = service({}, file, titleCli(fake.agents).run);
+    await env.onWorkspaceCreated({ id: "ws1" });
+    await store.mutate(undefined, (state) => { state.workspaces.ws1!.managerId = "planner"; });
+    const before = await store.read();
+    const result = await env.clearManager(fake.paseo, { workspaceId: "ws1", agentId: "planner", expectedRevision: before.revision });
+    expect(result).toMatchObject({ assignmentApplied: true, assignmentError: null, titleApplied: true, titleError: null,
+      workspace: { managerId: null, enabled: true, demoted: [{ agentId: "planner", demotedAt: now }] } });
+    expect(fake.agents.get("planner")?.title).toBe("[former Lane Manager] Ship it");
+  });
+
+  it("does not clear a newer planner when a stale clear races with assignment", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "planner-old", workspaceId: "ws1", cwd: "/repo/one", title: "🧭 Old", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const file = path.join(dir, "state.json");
+    const store = createLaneEnvironmentStore(file);
+    const cli = titleCli(fake.agents);
+    let raced = false;
+    const run = async (args: readonly string[]) => {
+      const output = await cli.run(args);
+      if (!raced && args[0] === "agent" && args[1] === "update" && args[2] === "planner-old") {
+        raced = true;
+        await store.mutate(undefined, (state) => { state.workspaces.ws1!.managerId = "planner-new"; });
+      }
+      return output;
+    };
+    const env = service({}, file, run);
+    await env.onWorkspaceCreated({ id: "ws1" });
+    await store.mutate(undefined, (state) => { state.workspaces.ws1!.managerId = "planner-old"; });
+    const before = await store.read();
+    const result = await env.clearManager(fake.paseo, { workspaceId: "ws1", agentId: "planner-old", expectedRevision: before.revision });
+    expect(raced).toBe(true);
+    expect(result.assignmentApplied).toBe(false);
+    expect(result.workspace.managerId).toBe("planner-new");
+    expect(result.assignmentError).toMatch(/manager changed during/);
+    expect(fake.agents.get("planner-old")?.title).toBe("[former Lane Manager] Old");
+  });
+
+  it("keeps the planner assigned and reports an unknown title when rollback cannot be verified", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "planner", workspaceId: "ws1", cwd: "/repo/one", title: "🧭 Ship it", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const file = path.join(dir, "state.json");
+    const store = createLaneEnvironmentStore(file);
+    const cli = titleCli(fake.agents);
+    const run = async (args: readonly string[]) => {
+      const result = await cli.run(args);
+      if (args[0] === "agent" && args[1] === "update" && args[2] === "planner") fake.agents.get("planner")!.title = "External title change";
+      return result;
+    };
+    const env = service({}, file, run);
+    await env.onWorkspaceCreated({ id: "ws1" });
+    await store.mutate(undefined, (state) => { state.workspaces.ws1!.managerId = "planner"; });
+    const before = await store.read();
+    const result = await env.clearManager(fake.paseo, { workspaceId: "ws1", agentId: "planner", expectedRevision: before.revision });
+    expect(result.assignmentApplied).toBe(false);
+    expect(result.titleApplied).toBeNull();
+    expect(result.titleError).toMatch(/rollback|readback|existing title/i);
+    expect(result.workspace.managerId).toBe("planner");
+    expect(fake.agents.get("planner")?.title).toBe("External title change");
+  });
+
+  it("rejects a clear request with a stale workspace revision before changing title or planner", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "planner", workspaceId: "ws1", cwd: "/repo/one", title: "🧭 Ship it", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const file = path.join(dir, "state.json");
+    const store = createLaneEnvironmentStore(file);
+    const cli = titleCli(fake.agents);
+    const env = service({}, file, cli.run);
+    await env.onWorkspaceCreated({ id: "ws1" });
+    await store.mutate(undefined, (state) => { state.workspaces.ws1!.managerId = "planner"; });
+    await expect(env.clearManager(fake.paseo, { workspaceId: "ws1", agentId: "planner", expectedRevision: 0 }))
+      .rejects.toThrow(/changed.*expected revision/);
+    expect(fake.agents.get("planner")?.title).toBe("🧭 Ship it");
+    expect((await store.read()).workspaces.ws1?.managerId).toBe("planner");
+    expect(cli.calls).toHaveLength(0);
+  });
+
   it("applies the manager title when assigning into a workspace with no previous manager", async () => {
     const fake = fakePaseo({ agents: [
       { id: "candidate", workspaceId: "ws1", cwd: "/repo/one", title: "Work on login", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },

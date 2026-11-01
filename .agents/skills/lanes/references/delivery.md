@@ -86,18 +86,24 @@ acceptance and commit; repair and rerun affected checks. Later source changes
 invalidate affected evidence.
 
 An authorized agent may accept engineering Tasks when each criterion is met.
-Task acceptance does not close its Goal. The default human gate applies to the
-integrated Goal. The manager attaches a Goal CR for the exact committed
-candidate, covered scope, criteria and checks, then separately submits a pinned
-review request. Attaching a CR alone does not request review. Request explicit
-`approved`, `changes_requested`, or `deferred` disposition. The user may
-coalesce selected Goal reviews into one Lane CR. Covered scope receives one
-review decision, not duplicate Goal and Lane approvals. CR attachments request
-candidate review; ADR approval settles a decision and does not accept
-implementation. A review inbox holds actionable requests pinned to candidate,
-content and coverage. A generic waiting label is not a review request. Never
-claim human approval before the user responds. If the candidate changes,
-refresh the request and affected checks. A stale attachment retains immutable
+Task acceptance does not close its Goal. Human review is available at Goal or
+Lane level, but is not required for every Goal. When the integrated Goal has no
+Goal-level human review, accept and close it with a `not-reviewed` label. The
+label records that the Goal was not individually reviewed; it is not human
+approval or a substitute for verification, a Goal acceptance receipt, or any
+explicitly requested review or external delivery gate. A later Goal or Lane
+review can cover the current candidate; update the label to reflect that
+review. For a requested Goal review, attach a CR for the exact committed
+candidate, scope, criteria and checks, then separately submit a pinned request.
+Attaching a CR alone does not request review. Request explicit `approved`,
+`changes_requested`, or `deferred` disposition. The user may coalesce selected
+Goal reviews into one Lane CR. Covered scope receives one review decision, not
+duplicate Goal and Lane approvals. CR attachments request candidate review;
+ADR approval settles a decision and does not accept implementation. A review
+inbox holds actionable requests pinned to candidate, content and coverage. A
+generic waiting label is not a review request. Never claim human approval before
+the user responds. If the candidate changes, refresh the request and affected
+checks. A stale attachment retains immutable
 `attachment.content` alongside `current_content`, pinned/current SHA-256
 identities, and read identities so the reviewer can see the original pin and
 the current-content warning together.
@@ -111,19 +117,24 @@ CLI-exported file into the dedicated read-only Markdown view. The installed
 but no API for opening an arbitrary Markdown file in a Paseo file tab. Do not
 describe this view as a native file-tab open or route the path through a browser.
 
-Goal completion requires approval of the exact candidate and fulfillment of the
-configured delivery endpoint. The manager records attributed evidence/receipt
-and closes the Goal only then. `changes_requested` returns bounded affected
-work to a dev and requires a new candidate-bound review request. `deferred` leaves
-an explicit user wait with its next owner and action; do not continue unrelated
-or endless work. Deferral is not final: the assigned reviewer may later record a
+Goal completion requires a valid acceptance receipt for the exact candidate and
+fulfillment of the configured delivery endpoint. A human decision is required
+only when the user or contract explicitly requested that review; otherwise the
+manager may record the actual accepting actor and close the completed Goal with
+the `not-reviewed` label. `changes_requested` returns bounded affected work to a
+dev and requires a new candidate-bound review request. `deferred` leaves an
+explicit user wait with its next owner and action; do not continue unrelated or
+endless work. Deferral is not final: the assigned reviewer may later record a
 new decision against the same still-current candidate. Fold the finished dev
-promptly after its Goal-attached handoff; pending Goal review never keeps it open.
+promptly after its Goal-attached handoff; pending Goal review never keeps it
+open.
 
-`lane_validation_mode=agent` is an explicit opt-out only where no named human
-gate applies. Manager analysis and agent Task acceptance do not replace the
-required user decision on the Goal CR. Use a ready-for-review state only when
-the candidate is complete, the request is actionable, and the host supports it.
+`lane_validation_mode=human` remains the default for requested human review;
+it does not make review mandatory for every Goal. `lane_validation_mode=agent`
+also permits agent acceptance where configured. Neither mode overrides a named
+human gate. Manager analysis and agent Task acceptance do not imply human
+approval. Use a ready-for-review state only when the candidate is complete, the
+request is actionable, and the host supports it.
 
 ## Commit and PR boundaries
 

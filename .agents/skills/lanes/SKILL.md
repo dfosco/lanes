@@ -464,16 +464,21 @@ when coordinating Task/Goal acceptance, worker folding, local commits or PR
 endpoints. The Lane Manager owns shared Lanes records and cross-Task integration
 oversight by default; assigned devs resolve conflicts and execute their own
 integration, checks and commits. Workers return evidence and proposed updates.
-Default human Goal review attaches a CR pinned to the exact candidate, content
-and covered scope, then requires a separate pinned request; attachment alone is
-not a review request. The user can coalesce selected Goals in a Lane CR without
-duplicate approval for covered scope. A review inbox holds actionable requests;
-a generic waiting label does not. ADR approval settles a decision, not
-implementation acceptance. Goal completion requires approval of the exact
-candidate plus its delivery endpoint. `changes_requested` requires bounded
-affected rework and a new request; `deferred` leaves an explicit user wait.
-Acceptance must match the exact candidate checked, and any material source
-change requires reassessment of affected evidence.
+Human review is available at Goal or Lane level, but is not required for every
+Goal. When a completed Goal has no Goal-level human review, accept and close it
+with the `not-reviewed` label. This records that no Goal-level human review
+occurred; it is not approval, verification, or an acceptance receipt. Do not use
+it to bypass an explicitly requested review gate, failed checks, missing
+acceptance evidence, or an external delivery approval. A user may request a
+Goal CR or coalesce covered Goals in a Lane CR; attach the exact candidate and
+scope, then submit a separate pinned request. Attachment alone is not a review
+request. Review can also happen manually later. Avoid duplicate approval for
+scope already covered by a Lane decision. A generic waiting label is not a
+review request. ADR approval settles a decision, not implementation acceptance.
+`changes_requested` requires bounded affected rework and a new request;
+`deferred` leaves an explicit user wait. Acceptance must match the exact
+candidate checked, and any material source change requires reassessment of
+affected evidence.
 
 Always fold a finished developer promptly, even while human Goal review is
 pending. Normally send latest context to the manager, persist it as a durable

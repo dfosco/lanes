@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Switch, Text, TextInput, View } from "react-native";
 import {
-  laneEnvironmentAssignManagerRpc, laneEnvironmentContinueRpc, laneEnvironmentPreferences, laneEnvironmentSettings,
+  laneEnvironmentAssignManagerRpc, laneEnvironmentClearManagerRpc, laneEnvironmentContinueRpc, laneEnvironmentPreferences, laneEnvironmentSettings,
   laneEnvironmentStatusRpc, type LaneEnvironmentSettings,
 } from "../shared/lane-environment";
 import type { AgentInfo } from "../shared/work";
@@ -91,13 +91,14 @@ function EnvironmentPreferences({ theme, hostId }: { theme: Theme; hostId: strin
 }
 
 /** Exact workspace controls are shared by the composer pill and the workspace panel/command center. */
-export function LaneWorkspaceControls({ theme, hostId, workspaceId, agentId }: {
-  theme: Theme; hostId: string; workspaceId: string; agentId?: string;
+export function LaneWorkspaceControls({ theme, hostId, workspaceId, agentId, compact = false }: {
+  theme: Theme; hostId: string; workspaceId: string; agentId?: string; compact?: boolean;
 }) {
   const settings = useSettings(laneEnvironmentPreferences);
   const runtime = useRuntime(hostId);
   const fetchStatus = useRpc(laneEnvironmentStatusRpc);
   const assignManager = useRpc(laneEnvironmentAssignManagerRpc);
+  const clearManager = useRpc(laneEnvironmentClearManagerRpc);
   const continueManager = useRpc(laneEnvironmentContinueRpc);
   const cache = useQueryClient();
   const [selectedAgentId, setSelectedAgentId] = useState(agentId ?? "");
@@ -135,7 +136,24 @@ export function LaneWorkspaceControls({ theme, hostId, workspaceId, agentId }: {
       setOperationError(result.assignmentApplied ? result.guidanceError ?? null : result.assignmentError ?? "Manager assignment was not applied.");
       await cache.invalidateQueries({ queryKey: ["clips-runtime", hostId] });
     },
-    onError: (error) => setOperationError(`Manager assignment failed: ${message(error)}`),
+    onError: async (error) => {
+      setOperationError(`Manager assignment failed: ${message(error)}`);
+      try { await status.refetch(); } catch { /* Keep the actionable mutation error visible. */ }
+    },
+  });
+  const unassign = useMutation({
+    mutationFn: (targetId: string) => clearManager({ workspaceId, agentId: targetId, expectedRevision: status.data?.storeRevision }),
+    onSuccess: async (result) => {
+      cache.setQueryData(["clips.lane-environment.status", hostId, workspaceId], {
+        storeRevision: result.storeRevision, workspace: result.workspace,
+      });
+      setOperationError(result.assignmentApplied ? null : result.assignmentError ?? result.titleError ?? "Workspace planner was not cleared.");
+      await cache.invalidateQueries({ queryKey: ["clips-runtime", hostId] });
+    },
+    onError: async (error) => {
+      setOperationError(`Workspace planner could not be cleared: ${message(error)}`);
+      try { await status.refetch(); } catch { /* Keep the actionable mutation error visible. */ }
+    },
   });
   const continuation = useMutation({
     mutationFn: () => continueManager({ workspaceId, fromAgentId: status.data!.workspace.managerId!,
@@ -152,6 +170,56 @@ export function LaneWorkspaceControls({ theme, hostId, workspaceId, agentId }: {
   const assignmentFeedback = assign.data;
   const continuationFeedback = continuation.data;
   const isLoading = status.isLoading || runtime.isLoading;
+
+  if (compact) {
+    // Workspace enablement and planner identity are separate canonical values and remain independently toggleable.
+    const isManager = Boolean(agentId) && status.data?.workspace.managerId === agentId;
+    const plannerBusy = assign.isPending || unassign.isPending || continuation.isPending ||
+      status.data?.workspace.continuation?.status === "creating";
+    const plannerDisabled = !agentId || !selectedAgent || settings.status !== "ready" || settings.saving ||
+      !status.data || status.isLoading || runtime.isLoading || runtime.isError || plannerBusy || (!isManager && !workspaceEnabled);
+    const toggleDisabled = settings.status !== "ready" || settings.saving;
+    const titleWarning = assignmentFeedback?.assignmentApplied && assignmentFeedback.titleApplied === false;
+    const note = operationError ?? (status.isError ? `Lanes status unavailable: ${message(status.error)}` : null)
+      ?? (assignmentFeedback?.guidanceError ?? null)
+      ?? (unassign.data?.titleError ?? null)
+      ?? (titleWarning ? "Saved, but the agent title was not updated." : null);
+    return <View style={{ gap: 10, padding: 12, width: 376, maxWidth: "100%" }}>
+      <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: workspaceEnabled, disabled: toggleDisabled }}
+        accessibilityLabel="Enable lanes workspace" disabled={toggleDisabled}
+        onPress={() => void saveWorkspaceEnabled(!workspaceEnabled)}
+        style={{ flexDirection: "row", alignItems: "center", gap: 8, opacity: toggleDisabled ? 0.5 : 1 }}>
+        <View style={{ width: 16, height: 16, borderRadius: 4, borderWidth: 1.5, alignItems: "center", justifyContent: "center",
+          borderColor: workspaceEnabled ? theme.colors.accent : theme.colors.foregroundMuted,
+          backgroundColor: workspaceEnabled ? theme.colors.accent : "transparent" }}>
+          {workspaceEnabled ? <Text style={{ color: theme.colors.accentForeground, fontSize: 11, lineHeight: 13, fontWeight: "700" }}>✓</Text> : null}
+        </View>
+        <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>Enable lanes workspace</Text>
+      </Pressable>
+      <Pressable accessibilityRole="checkbox" accessibilityLabel="Make this agent the workspace planner"
+        accessibilityState={{ checked: isManager, disabled: plannerDisabled }} disabled={plannerDisabled}
+        onPress={() => {
+          setOperationError(null);
+          if (!agentId) return;
+          if (isManager) unassign.mutate(agentId);
+          else assign.mutate(agentId);
+        }}
+        style={{ flexDirection: "row", alignItems: "center", gap: 8, opacity: plannerDisabled ? 0.45 : 1 }}>
+          <View style={{ width: 16, height: 16, borderRadius: 4, borderWidth: 1.5, alignItems: "center", justifyContent: "center",
+            borderColor: isManager ? theme.colors.accent : theme.colors.foregroundMuted,
+            backgroundColor: isManager ? theme.colors.accent : "transparent" }}>
+            {isManager ? <Text style={{ color: theme.colors.accentForeground, fontSize: 11, lineHeight: 13, fontWeight: "700" }}>✓</Text> : null}
+          </View>
+          <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
+            {plannerBusy ? "Updating workspace planner…" : "Make this agent the workspace planner"}
+          </Text>
+      </Pressable>
+      {note ? <Text accessibilityRole="alert" numberOfLines={2}
+        style={{ fontSize: 12, lineHeight: 15, color: operationError || status.isError ? theme.colors.statusDanger : theme.colors.statusWarning }}>
+        {note}
+      </Text> : null}
+    </View>;
+  }
 
   return <SettingsSection title="Lanes workspace">
     <SettingsCard>
@@ -245,10 +313,5 @@ export function LaneEnvironmentSettings({ theme, hostId }: { theme: Theme; hostI
 export function LaneComposerPopover({ theme, host, workspaceId, agentId, close }: {
   theme: Theme; host: PluginSurfaceProps["host"]; workspaceId: string; agentId: string; close(): void;
 }) {
-  return <ScrollView style={{ maxHeight: 540 }} contentContainerStyle={{ padding: 12, gap: 8 }}>
-    <LaneWorkspaceControls theme={theme} hostId={host.id} workspaceId={workspaceId} agentId={agentId} />
-    <Pressable accessibilityRole="button" onPress={close} style={{ alignSelf: "flex-end", padding: 8 }}>
-      <Text style={{ color: theme.colors.accent, fontSize: 12 }}>Done</Text>
-    </Pressable>
-  </ScrollView>;
+  return <LaneWorkspaceControls compact theme={theme} hostId={host.id} workspaceId={workspaceId} agentId={agentId} />;
 }

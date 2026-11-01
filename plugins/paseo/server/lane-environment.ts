@@ -571,6 +571,95 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
       }
     },
 
+    /** Clears only the named, currently assigned manager after a verified former-manager title update. */
+    async clearManager(paseo: PaseoApi, input: { workspaceId: string; agentId: string; expectedRevision?: number }) {
+      const agent = await readAgent(paseo, input.agentId);
+      if (agent.workspaceId !== input.workspaceId) throw new EnvironmentError(`Agent ${input.agentId} is not in workspace ${input.workspaceId}.`);
+      if (agent.archivedAt) throw new EnvironmentError(`Agent ${input.agentId} is archived and cannot be cleared as manager.`);
+      const current = await settings();
+      const initial = await store.read();
+      if (input.expectedRevision !== undefined && input.expectedRevision !== initial.revision) {
+        throw new StaleRevisionError(input.expectedRevision, initial.revision);
+      }
+      const record = initial.workspaces[input.workspaceId];
+      const managerStillCurrent = async () => (await store.read()).workspaces[input.workspaceId]?.managerId === agent.id;
+      const advisoryTitle = formerManagerTitle(topicOf(agent.title, current) || "Lane");
+      const currentResult = async () => {
+        const latest = await store.read();
+        return { storeRevision: latest.revision, workspace: viewOf(input.workspaceId, latest, current) };
+      };
+      if (record?.managerId !== agent.id) {
+        return {
+          ...(await currentResult()), assignmentApplied: false,
+          assignmentError: `Agent ${agent.id} is no longer the current workspace planner.`,
+          titleApplied: null, titleError: null, advisoryTitle,
+        };
+      }
+      if (record.continuation?.status === "creating" && isFresh(record.continuation.startedAt, now(), CONTINUATION_TTL_MS)) {
+        throw new EnvironmentError(`A manager continuation is in progress for ${input.workspaceId}; wait for it to finish before clearing the planner.`);
+      }
+
+      const titleResult = await applyVerifiedAgentTitle(paseo, runCli, {
+        agentId: agent.id, workspaceId: input.workspaceId, expectedCwd: agent.cwd ?? "",
+        previousTitle: agent.title, requestedTitle: advisoryTitle, purpose: "Former-manager",
+        isStillAllowed: managerStillCurrent,
+      });
+      if (titleResult.applied !== true) {
+        let titleApplied = titleResult.applied;
+        let titleError = titleResult.error;
+        if (titleResult.applied === null && agent.title !== null) {
+          const rollback = await applyVerifiedAgentTitle(paseo, runCli, {
+            agentId: agent.id, workspaceId: input.workspaceId, expectedCwd: agent.cwd ?? "",
+            previousTitle: advisoryTitle, requestedTitle: agent.title, purpose: "Former-manager rollback",
+            isStillAllowed: managerStillCurrent,
+          });
+          titleApplied = rollback.applied === true ? false : null;
+          titleError = `${titleError ?? "Former-manager title readback was ambiguous."} ${rollback.error ?? ""}`.trim();
+        }
+        return {
+          ...(await currentResult()), assignmentApplied: false,
+          assignmentError: titleResult.error ?? "Former-manager title could not be verified; planner assignment was kept.",
+          titleApplied, titleError, advisoryTitle,
+        };
+      }
+
+      try {
+        const committed = await store.mutate(initial.revision, (state) => {
+          const latest = state.workspaces[input.workspaceId];
+          if (latest?.managerId !== agent.id) {
+            throw new EnvironmentError(`Planner changed before clearing ${agent.id}; no planner state was cleared.`);
+          }
+          latest.managerId = null;
+          latest.pendingManager = null;
+          latest.demoted = [...latest.demoted, { agentId: agent.id, demotedAt: now() }];
+          return viewOf(input.workspaceId, state, current);
+        });
+        return {
+          storeRevision: committed.storeRevision, workspace: committed.result,
+          assignmentApplied: true, assignmentError: null, titleApplied: true, titleError: null, advisoryTitle,
+        };
+      } catch (error) {
+        let titleApplied: boolean | null = null;
+        let titleError: string | null;
+        if (agent.title === null) {
+          titleError = `Planner was not cleared, and the public CLI cannot restore the prior empty title. ${String(error)}`;
+        } else {
+          const rollback = await applyVerifiedAgentTitle(paseo, runCli, {
+            agentId: agent.id, workspaceId: input.workspaceId, expectedCwd: agent.cwd ?? "",
+            previousTitle: advisoryTitle, requestedTitle: agent.title, purpose: "Former-manager rollback",
+            isStillAllowed: managerStillCurrent,
+          });
+          titleApplied = rollback.applied === true ? false : null;
+          titleError = rollback.error ? `Planner was not cleared. ${rollback.error}` : `Planner was not cleared: ${String(error)}`;
+        }
+        return {
+          ...(await currentResult()), assignmentApplied: false,
+          assignmentError: `Planner was not cleared: ${String(error)}`,
+          titleApplied, titleError, advisoryTitle,
+        };
+      }
+    },
+
     /**
      * Explicit continuation. Creates a new session in the same workspace with the
      * checkpoint as its initial prompt. The previous session keeps its transcript;

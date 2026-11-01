@@ -141,8 +141,9 @@ is pending. Folding closes its native session/tab and owned process. Normal fold
 require latest context attached to each Goal and acknowledged by the manager;
 critical resource folds close immediately and preserve available context after.
 lane_validation_mode defaults to human and may be
-agent. Human validation is the default for Goal review; agent mode is an explicit
-opt-out only where no named human gate applies. lane_commit_mode defaults to
+agent. Human review is the default when Goal review is requested, but it is not
+required for every Goal. An unreviewed Goal may close with a not-reviewed label;
+named human gates still apply. lane_commit_mode defaults to
 after_validation and may be manual.
 lane_pr_mode defaults to none and may be prepare, draft, or ready. These settings
 guide workflow; they do not enforce scheduling, approve commits, or authorize

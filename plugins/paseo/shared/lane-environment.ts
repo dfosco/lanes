@@ -148,6 +148,23 @@ export const laneEnvironmentAssignManagerRpc = defineRpc({
   }),
 });
 
+export const laneEnvironmentClearManagerInput = z.object({
+  workspaceId: identity, agentId: identity, expectedRevision,
+}).strict();
+export const laneEnvironmentClearManagerRpc = defineRpc({
+  name: "clips.lane-environment.clear-manager",
+  input: laneEnvironmentClearManagerInput,
+  output: z.object({
+    storeRevision: z.number().int().nonnegative(),
+    workspace: laneEnvironmentWorkspaceView,
+    assignmentApplied: z.boolean(),
+    assignmentError: z.string().nullable(),
+    titleApplied: z.boolean().nullable(),
+    titleError: z.string().nullable(),
+    advisoryTitle: z.string(),
+  }),
+});
+
 export const laneEnvironmentContinueInput = z.object({
   workspaceId: identity,
   fromAgentId: identity,

@@ -13,15 +13,13 @@
     "test:package": "node scripts/package-smoke.js",
     "lanes": "node src/cli.js",
     "clips": "node src/cli.js",
-    "prepublishOnly": "npm run test:all",
     "preversion": "npm test",
-    "publish:npm": "npm publish --access public",
-    "update": "npm install -g @dfosco/lanes && npm list -g @dfosco/lanes --depth=0",
-    "version": "node -e \"import('fs').then(fs => { const v = JSON.parse(fs.readFileSync('package.json','utf8')).version; fs.writeFileSync('src/version.js', 'export const version = \\'' + v + '\\';\\n'); })\" && git add src/version.js",
-    "postversion": "git push && git push --tags && gh release create v$(node -p \"require('./package.json').version\") --generate-notes",
-    "release": "npm version patch",
-    "release:minor": "npm version minor",
-    "release:major": "npm version major"
+    "version": "node scripts/sync-version.js",
+    "release:patch": "npm version patch --no-git-tag-version",
+    "release:minor": "npm version minor --no-git-tag-version",
+    "release:major": "npm version major --no-git-tag-version",
+    "release:check": "node scripts/publish-release.js self-test",
+    "update": "npm install -g @dfosco/lanes && npm list -g @dfosco/lanes --depth=0"
   },
   "repository": {
     "type": "git",

@@ -960,32 +960,36 @@ actual source/installation/publication state, and the next required owner/action
 only when something remains. Scope recommendations (ship, fix first, defer, cut)
 are recommendations, not new Lanes statuses or permission to reduce scope.
 
-## Hand completed Goals to human validation
+## Complete Goals and route optional human review
 
 Use the shared [validation and acceptance gate](../lanes/references/delivery.md#validation-acceptance-and-user-review).
 When a Goal's implementation is complete, reconcile its changed artifact,
-required Tasks, checks, and unresolved issues. If implementation and
-verification are complete, present the exact committed candidate to a human for
-validation with a separate pinned review request. Unfinished or blocked Goals
-and Goals with current acceptance are not eligible for a new review request.
+required Tasks, checks, and unresolved issues. If no human review was requested
+or named by the contract, record a valid Goal acceptance receipt and close it
+with the `not-reviewed` label. Do not imply human approval. Unfinished or blocked
+Goals and Goals with current acceptance are not eligible for a new review
+request.
 
-Attaching a CR alone does not request review. The manager separately submits a
-pinned request naming the reviewer, exact candidate, covered scope, criteria,
-checks and results, requested response, and next owner. A user may coalesce
-selected Goals into a Lane CR; do not request another approval for obligations
-already covered. The review inbox contains actionable candidate-bound requests.
+When review is requested or required by an explicit gate, attaching a CR alone
+does not request it. Submit a pinned request naming the reviewer, exact
+candidate, covered scope, criteria, checks and results, requested response, and
+next owner. A user may coalesce selected Goals into a Lane CR; do not request
+another approval for obligations already covered. Review may also happen
+manually later. The review inbox contains actionable candidate-bound requests.
 If the candidate changes, refresh the request and affected checks. For stale CR
 content, show the immutable pinned text alongside current text, both content
 identities and read identities. Never record user approval before the user
 responds.
 
-An approved exact candidate plus a fulfilled configured delivery endpoint lets
-the manager record attributed evidence or a receipt and close the Goal. A
-`changes_requested` decision leads to bounded rework for affected scope and a
-new candidate review. A `deferred` decision is an explicit user wait, not a
-reason to keep building indefinitely. Always fold finished developers promptly
-after their Goal-attached handoff; pending human review never keeps them open.
-A critical resource fold closes first and records available context afterward.
+Close a reviewed Goal only after the review decision and configured delivery
+endpoint are satisfied. Close an unreviewed Goal after its acceptance evidence
+and configured delivery endpoint are satisfied, preserving the `not-reviewed`
+label. A `changes_requested` decision leads to bounded rework for affected scope
+and a new candidate review. A `deferred` decision is an explicit user wait, not
+a reason to keep building indefinitely. Always fold finished developers
+promptly after their Goal-attached handoff; pending human review never keeps them
+open. A critical resource fold closes first and records available context
+afterward.
 
 A review request is not acceptance and does not change a Goal lifecycle status.
 

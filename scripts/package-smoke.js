@@ -158,6 +158,12 @@ async function verifyPackage() {
   ]) {
     assert.match(managerPolicy, pattern, `packaged Lane Manager must support: ${scenario}`);
   }
+  assert.match(managerPolicy, /If no human review was requested[\s\S]*valid Goal acceptance receipt[\s\S]*`not-reviewed` label/,
+    'packaged Lane Manager must allow completed Goals to close without human review');
+  assert.match(managerPolicy, /When review is requested or required by an explicit gate/,
+    'packaged Lane Manager must preserve explicitly requested human review');
+  assert.match(managerPolicy, /Review may also happen manually later/,
+    'packaged Lane Manager must allow later manual review');
   assert.doesNotMatch(managerPolicy, /Never implement or run substantive validation|Do not implement it yourself|Do not take over implementation or substantive verification when a dev agent is unavailable/i, 'packaged Lane Manager retains a blanket fallback prohibition');
   assert.match(managerPolicy, /Continued delivery is already the Lane Manager's responsibility/);
   for (const [scenario, pattern] of [
@@ -208,6 +214,9 @@ async function verifyPackage() {
   const deliveryPolicy = fs.readFileSync(
     path.join(fileURLToPath(skillLibrary.skills['skill:lanes']), 'references', 'delivery.md'), 'utf8',
   ).replace(/\s+/g, ' ');
+  assert.match(deliveryPolicy, /Human review is available at Goal or Lane level, but is not required for every Goal/);
+  assert.match(deliveryPolicy, /close it with a `not-reviewed` label/);
+  assert.match(deliveryPolicy, /A human decision is required only when the user or contract explicitly requested that review/);
   for (const [scenario, pattern] of [
     ['native session and process closure on every harness', /close the native agent\/sub-agent\/session or tab and terminate its owned runtime process on every harness/],
     ['Goal-attached latest context before normal closure', /Persist that context as a durable attachment on \*\*each respective Goal\*\* before closing[\s\S]*lanes handoff record[\s\S]*read and acknowledge the latest attached context[\s\S]*immediately close the native worker and its owned process/],

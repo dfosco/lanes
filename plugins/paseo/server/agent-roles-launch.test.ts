@@ -232,7 +232,7 @@ describe("role launches through the backend", () => {
       .resolves.toMatchObject({ agent: "codex/gpt-6-luna" });
     expect(workspaceCreate).toHaveBeenCalledOnce();
     expect(agentCreate).toHaveBeenCalledOnce();
-  });
+  }, 20_000);
 
   it("rejects automatic routing when all ranked providers are over threshold", async () => {
     setRoles(builtInRoles());

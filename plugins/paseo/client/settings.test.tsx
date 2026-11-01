@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   projectRpc: vi.fn(), boardRpc: vi.fn(), collaborationRpc: vi.fn(), roleDefaultsRpc: vi.fn(), saveRoleDefaultsRpc: vi.fn(),
   routingPolicyRpc: vi.fn(), saveRoutingPolicyRpc: vi.fn(),
   settingsSave: vi.fn(),
+  providerEntries: [] as any[],
   panConfigs: [] as any[],
   agentConfigContexts: [] as { agent: string; thinkingOptionId: string; showModel?: boolean; showThinking?: boolean }[],
   roleSettings: [] as { id: string; name: string; type?: "planner" | "worker" }[],
@@ -27,8 +28,7 @@ vi.mock("@getpaseo/plugin/client", () => ({
     : rpc.name === "clips.board" ? state.boardRpc : rpc.name === "clips.collaboration.set" ? state.collaborationRpc
       : rpc.name === "clips.role-model-defaults" ? state.roleDefaultsRpc : rpc.name === "clips.role-model-defaults.save" ? state.saveRoleDefaultsRpc
         : rpc.name === "clips.model-routing-policy" ? state.routingPolicyRpc : state.saveRoutingPolicyRpc,
-  usePaseo: () => ({ providers: { snapshot: async () => ({ entries: [{ provider: "codex", label: "Codex", status: "ready", enabled: true,
-    models: [{ id: "model", isSelectable: true, thinkingOptions: [{ id: "high" }] }] }] }) } }),
+  usePaseo: () => ({ providers: { snapshot: async () => ({ entries: state.providerEntries }) } }),
   useSettings: (definition: { id?: string }) => definition?.id === "agent-roles"
     ? ({ status: "ready", values: { roles: state.roleSettings }, revision: "r3", saving: false, saveError: null, save: state.settingsSave })
     : ({ status: "ready", values, revision: "r3", saving: false, saveError: null, save: state.settingsSave }),
@@ -95,15 +95,8 @@ vi.mock("@tanstack/react-query", async () => {
     useQuery: ({ queryKey }: any) => {
       if (queryKey[0] === "clips.role-defaults") return { data: { role: queryKey[1], model: "model", agent: "codex/model",
         reasoningEffort: "high", source: "user" }, refetch: vi.fn() };
-      if (queryKey[0] === "clips.routing.providers") return { data: [
-        { provider: "codex", label: "Codex", status: "ready", enabled: true, models: [{ id: "model",
-          thinkingOptions: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] }] },
-        { provider: "antigravity", label: "Antigravity", status: "ready", enabled: true, models: [
-          { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", isSelectable: true },
-          { id: "hidden", isSelectable: false },
-        ] },
-        { provider: "claude", label: "Claude", status: "offline", enabled: true, models: [{ id: "not-ready" }] },
-      ] };
+      if (queryKey[0] === "clips.routing.providers") return { data: state.providerEntries,
+        isLoading: false, isError: false };
       if (queryKey[0] === "clips.role-defaults.providers") return { data: [
         { provider: "codex", label: "Codex", status: "ready", enabled: true, models: [{ id: "model" }] },
       ] };
@@ -122,6 +115,15 @@ beforeEach(() => {
   state.panConfigs = [];
   state.agentConfigContexts = [];
   state.roleSettings = [];
+  state.providerEntries = [
+    { provider: "codex", label: "Codex", status: "ready", enabled: true,
+      models: [{ id: "model", isSelectable: true, thinkingOptions: [{ id: "low", label: "Low" }, { id: "high", label: "High" }] }] },
+    { provider: "antigravity", label: "Antigravity", status: "ready", enabled: true, models: [
+      { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)", isSelectable: true },
+      { id: "hidden", isSelectable: false },
+    ] },
+    { provider: "claude", label: "Claude", status: "offline", enabled: true, models: [{ id: "not-ready" }] },
+  ];
   state.routingPolicy = { version: 1, providerOrder: ["codex", "opencode", "claude"],
     modelOrder: { manager: ["codex/manager", "opencode/manager"], dev: ["codex/dev", "claude/dev"] },
     reasoningEffortOrder: ["low", "medium", "high"], warningThresholds: [80, 90], handoffThreshold: 95 };
@@ -257,6 +259,40 @@ describe("Settings subviews", () => {
       modelOrder: { manager: ["codex/manager", "opencode/manager", "antigravity/gemini-4-argon-high"], dev: ["codex/dev", "claude/dev"] },
       reasoningEffortOrder: ["low", "medium", "high", "ultra"],
     }));
+  });
+
+  it("lets UX Engineer add OpenCode models when that provider is ranked for another role", async () => {
+    state.roleSettings = [{ id: "design-engineer", name: "UX Engineer", type: "worker" }];
+    const openCodeModels = Array.from({ length: 9 }, (_, index) => ({
+      id: `openai/model-${index + 1}`, label: `OpenAI Model ${index + 1}`, isSelectable: true,
+    }));
+    state.providerEntries = [
+      { provider: "claude", label: "Claude", status: "ready", enabled: true,
+        models: [{ id: "sonnet", label: "Sonnet", isSelectable: true }] },
+      { provider: "opencode", label: "OpenCode", status: "ready", enabled: true, models: openCodeModels },
+      { provider: "codex", label: "Codex", status: "ready", enabled: true,
+        models: [{ id: "gpt-6.1-sol", label: "GPT 6.1 Sol", isSelectable: true }] },
+    ];
+    state.routingPolicy = { ...state.routingPolicy, modelOrder: {
+      manager: ["opencode/openai/model-1"], dev: ["opencode/openai/model-2"],
+      "design-engineer": ["claude/sonnet"],
+    } };
+    await render();
+    await act(async () => { button("Model Routing").click(); });
+    const addModelButtons = container.querySelectorAll<HTMLButtonElement>('button[aria-label^="Add model:"]');
+    expect(addModelButtons).toHaveLength(3);
+    await act(async () => { addModelButtons[2]!.click(); });
+    expect(container.querySelector('[role="dialog"]')).toBeTruthy();
+    const search = container.querySelector<HTMLInputElement>('input[aria-label="Search Add model"]');
+    expect(search).toBeTruthy();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "OpenAI Model 9");
+      search!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(Array.from(container.querySelectorAll('[role="dialog"] button')).map((item) => item.getAttribute("aria-label")))
+      .toEqual(["OpenCode · OpenAI Model 9"]);
+    await act(async () => { container.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="OpenCode · OpenAI Model 9"]')!.click(); });
+    expect(container.querySelector('button[aria-label^="Model for opencode/openai/model-9:"]')).toBeTruthy();
   });
 
   it("saves a reasoning effort chosen next to a ranked model, only for models that offer one", async () => {

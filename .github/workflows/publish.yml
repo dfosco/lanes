@@ -1,0 +1,91 @@
+name: Publish npm release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable version tag to publish (for example, v3.0.0)
+        required: true
+        type: string
+
+concurrency:
+  group: npm-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out the requested release tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11.5.1
+
+      - name: Validate and check out the stable tag
+        run: node scripts/publish-release.js validate-and-checkout
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+          GITHUB_REF: ${{ github.ref }}
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Run root tests and package smoke checks
+        run: npm run test:all
+
+      - name: Install Paseo plugin dependencies
+        run: npm ci --prefix plugins/paseo
+
+      - name: Typecheck Paseo plugin
+        run: npm run typecheck --prefix plugins/paseo
+
+      - name: Test Paseo plugin
+        run: npm test --prefix plugins/paseo -- --maxWorkers=2
+
+      - name: Publish or verify matching npm artifact
+        run: node scripts/publish-release.js publish
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+          GITHUB_REF: ${{ github.ref }}
+
+      - name: Create GitHub release notes if absent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          if [ "$RELEASE_EVENT" = "workflow_dispatch" ]; then
+            tag="$DISPATCH_TAG"
+          else
+            tag="$RELEASE_TAG"
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub release $tag already exists."
+          else
+            node scripts/publish-release.js notes > "$RUNNER_TEMP/lanes-release-notes.md"
+            gh release create "$tag" --verify-tag --notes-file "$RUNNER_TEMP/lanes-release-notes.md"
+          fi

@@ -238,11 +238,12 @@ lanes config lane_pr_mode prepare
 
 The Task limit caps the number of Tasks assigned to one Lane Dev session. Its
 assignment ends when those Tasks finish, even if it handled fewer than the cap;
-the cap does not authorize indefinite worker reuse. Validation defaults to a
-named human reviewing the Goal's attached change request for the exact committed
-candidate. An authorized agent can accept engineering Tasks when their own gate
-is satisfied; that does not replace a selected human Goal review. `agent` is an
-explicit opt-out only when no named human gate applies. Commit mode describes
+the cap does not authorize indefinite worker reuse. `human` is the default
+mode for requested Goal review, but it does not require human review for every
+Goal. A completed Goal may be accepted and closed without Goal-level review
+with the `not-reviewed` label; review may happen at Lane level or manually
+later. An authorized agent can accept engineering Tasks when their own gate is
+satisfied. Neither validation mode overrides an explicit human gate. Commit mode describes
 the handoff: `after_validation` means after automated dev checks and before
 manager analysis or user validation; the dev may commit its checked, scoped
 changes when the task contract authorizes it. `manual` leaves an explicit
@@ -895,19 +896,24 @@ needs a development server or a frontend build. Run the separate plugin suites
 and Paseo typechecks for integration changes. The Copilot package carries a
 checked renderer; changing its build inputs requires a destination rebuild
 and `npm run check:build --prefix plugins/copilot`.
-Release commands perform external versioning and publication workflow:
+Choose the version bump explicitly. These commands run the root tests, update
+`package.json`, `npm-shrinkwrap.json`, and `src/version.js`, but do not create a
+Git commit or tag, push, or publish:
 
 ```bash
-npm run release          # patch
+npm run release:patch
 npm run release:minor
 npm run release:major
-npm publish
 ```
 
-Version commands run tests, update the version, create a commit and tag, push to
-GitHub, and create a GitHub Release. They require the GitHub CLI. Publishing
-reruns the full test and package smoke suite before publishing
-`@dfosco/lanes`.
+Review and commit the version change, then create and push its `vMAJOR.MINOR.PATCH`
+tag from a commit on `main`. A tag push starts `.github/workflows/publish.yml`;
+to retry, dispatch that workflow with the existing tag. It validates the tag and
+package version, runs root and Paseo tests plus package smoke checks, and uses
+npm trusted publishing with OIDC provenance. A retry skips an existing npm
+version only when its tarball integrity matches the tag and the registry reports
+provenance. It creates GitHub release notes from the exact matching section in
+`CHANGELOG.md`. Do not publish locally with `npm publish`.
 
 ## License
 

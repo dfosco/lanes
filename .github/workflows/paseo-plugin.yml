@@ -27,4 +27,4 @@ jobs:
       - name: Typecheck plugin SDK boundaries
         run: npm run typecheck --prefix plugins/paseo
       - name: Test runtime mapping and board normalization
-        run: npm test --prefix plugins/paseo
+        run: npm test --prefix plugins/paseo -- --maxWorkers=2

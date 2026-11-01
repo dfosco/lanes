@@ -44,6 +44,7 @@ describe("resource monitor plugin lifecycle", () => {
     expect(releases).toHaveLength(13);
     expect(handlers.has("clips.lane-environment.status")).toBe(true);
     expect(handlers.has("clips.lane-environment.assign-manager")).toBe(true);
+    expect(handlers.has("clips.lane-environment.clear-manager")).toBe(true);
     expect(handlers.has("clips.lane-environment.continue")).toBe(true);
     for (const release of releases) expect(release).toHaveBeenCalledTimes(1);
   });

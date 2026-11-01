@@ -109,7 +109,10 @@ describe('documented role decisions (not live model compliance)', () => {
     }
     expect(compact(delivery)).toContain('defaults are `3`, `human`, `after_validation`, and `none`');
     expect(compact(delivery)).toContain('commits after automated checks pass and before manager analysis or user validation');
-    expect(delivery).toContain('The manager attaches a Goal CR');
+    expect(compact(delivery)).toContain('Human review is available at Goal or Lane level');
+    expect(compact(delivery)).toContain('accept and close it with a `not-reviewed` label');
+    expect(compact(delivery)).toContain('not human approval or a substitute for verification');
+    expect(delivery).toContain('manager may record the actual accepting actor');
     expect(compact(delivery)).toContain('may coalesce selected Goal reviews into one Lane CR');
     expect(compact(delivery)).toContain('not duplicate Goal and Lane approvals');
     expect(compact(delivery)).toContain('A generic waiting label is not a review request');
@@ -124,7 +127,8 @@ describe('documented role decisions (not live model compliance)', () => {
     expect(compact(delivery)).toContain('Only GitHub `APPROVED` and `CHANGES_REQUESTED` events import');
     expect(compact(delivery)).toContain('aggregate `reviewDecision` do not imply approval');
     expect(compact(delivery)).toContain('same still-current candidate');
-    expect(compact(delivery)).toContain('closes the Goal only then');
+    expect(compact(delivery)).toContain('valid acceptance receipt for the exact candidate');
+    expect(compact(delivery)).toContain('only when the user or contract explicitly requested that review');
     expect(compact(delivery)).toContain('`deferred` leaves an explicit user wait');
     expect(compact(delivery)).toContain('PR creation is only a review surface');
     expect(compact(delivery)).toContain('approved head to be an ancestor');

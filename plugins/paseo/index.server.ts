@@ -9,7 +9,7 @@ import { resourceManagerPreferences, resourceManagerStatusRpc } from "./shared/r
 import { resourceChannelRpc, resourceFoldRpc, resourceHandoffRpc } from "./shared/resource-channel";
 import { createResourceFolding } from "./server/resource-folding";
 import {
-  laneEnvironmentAssignManagerRpc, laneEnvironmentContinueRpc, laneEnvironmentPreferences, laneEnvironmentStatusRpc,
+  laneEnvironmentAssignManagerRpc, laneEnvironmentClearManagerRpc, laneEnvironmentContinueRpc, laneEnvironmentPreferences, laneEnvironmentStatusRpc,
   type LaneEnvironmentSettings,
 } from "./shared/lane-environment";
 import { createLaneEnvironment } from "./server/lane-environment";
@@ -86,6 +86,7 @@ export default function contribute(server: PluginServerContext) {
   });
   handle(laneEnvironmentStatusRpc, (input) => laneEnvironment.status(input.workspaceId));
   handle(laneEnvironmentAssignManagerRpc, (input, { paseo }) => laneEnvironment.assignManager(paseo, input));
+  handle(laneEnvironmentClearManagerRpc, (input, { paseo }) => laneEnvironment.clearManager(paseo, input));
   handle(laneEnvironmentContinueRpc, (input, { paseo }) => laneEnvironment.continueManager(paseo, input));
   handle(resourceManagerStatusRpc, () => resources.status());
   handle(resourceChannelRpc, async (input) => ({ ...await resources.channel(input), pendingHandoffs: folding.pending(input.managerId) }));

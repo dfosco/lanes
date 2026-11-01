@@ -1,5 +1,47 @@
 # Lanes
 
+## 3.0.0
+
+### Breaking configuration changes
+
+- Consolidate role model and reasoning choices into Model Routing. Remove the
+  separate Lane Manager and Lane Dev settings pages and retire per-role
+  candidate, quota and metered controls. Existing provider defaults remain
+  compatibility fallbacks; existing role guidance and saved identities remain
+  readable without automatic user-store migration.
+
+### Roles and workspaces
+
+- Classify agent responsibilities as planner or worker. Lane Manager is the
+  built-in planner; Lane Dev and UX Engineer are workers. UX Engineer retains
+  the existing `design-engineer` role ID and routing preferences.
+- Teach portable skills to interpret planner and worker requests without
+  changing explicit delivery mode, scope or approval requirements.
+- Add composable role guidance and skills, custom role types, and independent
+  model and effort rankings for each role.
+- Add workspace Lanes activation, planner assignment and continuation controls.
+  The per-agent workspace planner checkbox reflects the workspace's single
+  planner assignment and transfers it when another agent is checked.
+- Activate an existing session's Lane Manager skill with a short slash command
+  instead of inserting the full skill text into the visible conversation.
+
+### Routing and delivery
+
+- Persist provider-aware model defaults, ordered routing policy and warning and
+  handoff thresholds through supported CLI and plugin settings interfaces.
+- Use fresh host usage reports for automatic routing. Unknown or stale quota
+  data is explicit; active-session continuation retains checkpoint and
+  quiescence requirements. No background usage monitor is implied.
+- Add searchable model choices, draggable priority rows, per-model effort and
+  inline role permission and provider options with compact settings layouts.
+- Allow verified Goals to close labeled `not-reviewed`. Review can happen at
+  Lane level or manually later; closure does not manufacture human approval.
+
+### Publishing
+
+- Publish from GitHub Actions using npm OIDC trusted publishing and provenance.
+  Tag and manual-dispatch releases share a validated, retry-safe workflow.
+
 ## 2.2.0
 
 ### Resource management and developer folding

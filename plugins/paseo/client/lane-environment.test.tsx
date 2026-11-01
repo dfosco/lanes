@@ -7,12 +7,13 @@ import { LaneWorkspaceControls } from "./lane-environment";
 
 const state = vi.hoisted(() => ({
   settings: undefined as any, workspace: undefined as any, agents: [] as any[],
-  fetchStatus: vi.fn(), assign: vi.fn(), continuation: vi.fn(), saveSettings: vi.fn(), reloadSettings: vi.fn(),
-  queryKeys: [] as unknown[][], cacheWrites: [] as unknown[][],
+  fetchStatus: vi.fn(), assign: vi.fn(), clear: vi.fn(), continuation: vi.fn(), saveSettings: vi.fn(), reloadSettings: vi.fn(),
+  queryKeys: [] as unknown[][], cacheWrites: [] as unknown[][], querySubscribers: [] as ((value: any) => void)[],
 }));
 vi.mock("@getpaseo/plugin/client", () => ({
   useRpc: (contract: { name: string }) => contract.name === "clips.lane-environment.status" ? state.fetchStatus
-    : contract.name === "clips.lane-environment.assign-manager" ? state.assign : state.continuation,
+    : contract.name === "clips.lane-environment.assign-manager" ? state.assign
+      : contract.name === "clips.lane-environment.clear-manager" ? state.clear : state.continuation,
   useSettings: () => state.settings,
 }));
 vi.mock("@getpaseo/plugin/client/ui", async () => {
@@ -28,11 +29,22 @@ vi.mock("@getpaseo/plugin/client/ui", async () => {
   };
 });
 vi.mock("@tanstack/react-query", async () => {
-  const { useState } = await import("react");
+  const { useEffect, useState } = await import("react");
   return {
-    useQuery: ({ queryKey }: any) => { state.queryKeys.push(queryKey); return { data: state.workspace, isLoading: false, isError: false, refetch: vi.fn() }; },
+    useQuery: ({ queryKey }: any) => {
+      state.queryKeys.push(queryKey);
+      const [data, setData] = useState(state.workspace);
+      useEffect(() => {
+        state.querySubscribers.push(setData);
+        return () => { state.querySubscribers = state.querySubscribers.filter((subscriber) => subscriber !== setData); };
+      }, []);
+      return { data, isLoading: false, isError: false, refetch: vi.fn() };
+    },
     useQueryClient: () => ({
-      setQueryData: (...args: unknown[]) => state.cacheWrites.push(args),
+      setQueryData: (key: unknown[], value: any) => {
+        state.cacheWrites.push([key, value]); state.workspace = value;
+        for (const subscriber of state.querySubscribers) subscriber(value);
+      },
       invalidateQueries: vi.fn(),
     }),
     useMutation: (options: any) => {
@@ -54,8 +66,9 @@ vi.mock("react-native", async () => {
     ActivityIndicator: () => h("span", {}, "Loading"),
     View: ({ children, accessibilityLabel, style }: any) => h("div", { "aria-label": accessibilityLabel, style }, children),
     Text: ({ children, accessibilityLabel, accessibilityRole, style }: any) => h("span", { "aria-label": accessibilityLabel, role: accessibilityRole, style }, children),
-    Pressable: ({ children, accessibilityRole, accessibilityLabel, disabled, onPress }: any) =>
-      h("button", { role: accessibilityRole, "aria-label": accessibilityLabel, disabled, onClick: onPress }, children),
+    Pressable: ({ children, accessibilityRole, accessibilityLabel, accessibilityState, disabled, onPress }: any) =>
+      h("button", { role: accessibilityRole, "aria-label": accessibilityLabel,
+        "aria-checked": accessibilityState?.checked, disabled, onClick: onPress }, children),
     Switch: ({ value, onValueChange, disabled }: any) => h("input", { type: "checkbox", checked: value, disabled,
       onChange: (event: any) => onValueChange(event.currentTarget.checked) }),
     ScrollView: ({ children, style }: any) => h("div", { style }, children),
@@ -71,13 +84,17 @@ const workspace = (enabled: boolean, managerId: string | null) => ({ storeRevisi
   workspaceId: "ws-exact", enabled, enabledSource: enabled ? "explicit" : "none", managerId,
   pendingManager: null, continuation: null, demoted: [],
 } });
-const render = (agentId?: string) => act(async () => root.render(createElement(LaneWorkspaceControls, {
-  theme, hostId: "host-selected", workspaceId: "ws-exact", agentId,
+const render = (agentId?: string, compact = false) => act(async () => root.render(createElement(LaneWorkspaceControls, {
+  theme, hostId: "host-selected", workspaceId: "ws-exact", agentId, compact,
 })));
+const renderPlannerPair = () => act(async () => root.render(createElement("div", {},
+  createElement(LaneWorkspaceControls, { theme, hostId: "host-selected", workspaceId: "ws-exact", agentId: "agent-old", compact: true }),
+  createElement(LaneWorkspaceControls, { theme, hostId: "host-selected", workspaceId: "ws-exact", agentId: "agent-next", compact: true }),
+)));
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
-  vi.clearAllMocks(); state.queryKeys = []; state.cacheWrites = [];
+  vi.clearAllMocks(); state.queryKeys = []; state.cacheWrites = []; state.querySubscribers = [];
   state.settings = { status: "ready", values: defaultLaneEnvironmentSettings(), revision: "host-settings-5", saving: false,
     saveError: null, save: state.saveSettings, reload: state.reloadSettings };
   state.workspace = workspace(false, null); state.agents = [];
@@ -86,6 +103,8 @@ beforeEach(() => {
     assignmentApplied: true, assignmentError: null, titleApplied: true, titleError: null,
     advisoryTitle: "🧭 Topic", formerManagerTitleApplied: false, formerManagerTitleError: "rename unavailable",
     formerManagerAdvisoryTitle: "[former Lane Manager] Topic" });
+  state.clear.mockResolvedValue({ storeRevision: 8, workspace: workspace(false, null).workspace,
+    assignmentApplied: true, assignmentError: null, titleApplied: true, titleError: null, advisoryTitle: "[former Lane Manager] Topic" });
   state.continuation.mockResolvedValue({}); state.saveSettings.mockResolvedValue(true); state.reloadSettings.mockResolvedValue(undefined);
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
@@ -134,5 +153,40 @@ describe("workspace Lanes controls", () => {
     expect(container.textContent).toContain("Former manager title: not applied or confirmed");
     expect(container.textContent).toContain("[former Lane Manager] Topic");
     expect(container.textContent).toContain("rename unavailable");
+  });
+
+  it("transfers the planner checkbox between agent pills from shared workspace state", async () => {
+    state.workspace = workspace(true, "agent-old");
+    state.fetchStatus.mockResolvedValue(state.workspace);
+    state.agents = [
+      { id: "agent-old", workspaceId: "ws-exact", title: "Old planner", status: "idle" },
+      { id: "agent-next", workspaceId: "ws-exact", title: "Next planner", status: "idle" },
+    ];
+    state.assign.mockResolvedValue({
+      storeRevision: 8, workspace: workspace(true, "agent-next").workspace,
+      assignmentApplied: true, assignmentError: null, titleApplied: true, titleError: null, guidanceError: null,
+      advisoryTitle: "🧭 Next planner", formerManagerTitleApplied: true, formerManagerTitleError: null,
+      formerManagerAdvisoryTitle: "[former Lane Manager] Old planner" });
+    await renderPlannerPair();
+    const checkboxes = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-label="Make this agent the workspace planner"]'));
+    expect(checkboxes().map((checkbox) => checkbox.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+    await act(async () => { checkboxes()[1]!.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(state.assign).toHaveBeenCalledWith({ workspaceId: "ws-exact", agentId: "agent-next", expectedRevision: 7 });
+    expect(checkboxes().map((checkbox) => checkbox.getAttribute("aria-checked"))).toEqual(["false", "true"]);
+  });
+
+  it("clears the current planner independently of workspace activation", async () => {
+    state.workspace = workspace(false, "agent-old");
+    state.fetchStatus.mockResolvedValue(state.workspace);
+    state.agents = [{ id: "agent-old", workspaceId: "ws-exact", title: "Old planner", status: "idle" }];
+    await render("agent-old", true);
+    const checkboxes = () => Array.from(container.querySelectorAll<HTMLButtonElement>('button[aria-label="Make this agent the workspace planner"]'));
+    const activation = container.querySelector<HTMLButtonElement>('button[aria-label="Enable lanes workspace"]')!;
+    expect(checkboxes()[0]?.getAttribute("aria-checked")).toBe("true");
+    expect(checkboxes()[0]?.disabled).toBe(false);
+    await act(async () => { checkboxes()[0]!.click(); await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(state.clear).toHaveBeenCalledWith({ workspaceId: "ws-exact", agentId: "agent-old", expectedRevision: 7 });
+    expect(checkboxes()[0]?.getAttribute("aria-checked")).toBe("false");
+    expect(activation.getAttribute("aria-checked")).toBe("false");
   });
 });

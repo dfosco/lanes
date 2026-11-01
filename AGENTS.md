@@ -176,13 +176,18 @@ behavior and preserve the authority for exceptions.
 The delivery defaults are `lane_validation_mode=human`,
 `lane_commit_mode=after_validation`, and `lane_pr_mode=none`. Here,
 `after_validation` means the dev's automated checks passed: an authorized dev
-commits its scoped changes before manager analysis and user validation. The
-default human gate is a Goal-attached CR for the exact committed candidate; a
-user may coalesce covered Goals in a Lane CR without duplicate approval. The
-manager mediates competing technical approaches and records agreed decisions;
-the dev owns implementation and routine conflict resolution. Always fold a dev
-promptly when its bounded assignment ends, without waiting for human Goal review
-or retaining it idle for possible follow-up. Folding closes its native
+commits its scoped changes before manager analysis and any requested review.
+Human review is available at Goal or Lane level, but it is not required to close
+every Goal. A completed Goal without human review may be accepted and closed
+with a `not-reviewed` label. That label records the absence of Goal-level human
+review; it does not claim approval or waive verification, acceptance evidence,
+an explicitly requested review gate, or external delivery approval. Review can
+be requested at Lane level or manually later. A Lane review may cover multiple
+Goals without duplicate approval. The manager mediates competing technical
+approaches and records agreed decisions; the dev owns implementation and routine
+conflict resolution. Always fold a dev promptly when its bounded assignment
+ends, without waiting for human Goal review or retaining it idle for possible
+follow-up. Folding closes its native
 agent/sub-agent/tab and owned runtime process on any harness; idle, Task completion
 and turn interruption do not count. Normally send latest context to its manager,
 persist it on each respective Goal with `lanes handoff record`, acknowledge it,
