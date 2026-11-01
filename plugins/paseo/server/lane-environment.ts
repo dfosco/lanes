@@ -130,7 +130,6 @@ function parseCliJson(output: string, command: string): unknown {
 
 type RenameObservation = {
   agent: EnvironmentAgent;
-  cliListName: string | null;
   cliInspectName: string | null;
 };
 
@@ -148,22 +147,9 @@ async function observeRenameTarget(
     throw new EnvironmentError(`Agent ${input.agentId} cwd does not match its observed workspace directory.`);
   }
 
-  const [listOutput, inspectOutput] = await Promise.all([
-    runCli(["ls", "--global", "--json"]),
-    runCli(["inspect", input.agentId, "--json"]),
-  ]);
-  const listed = parseCliJson(listOutput, "ls --global --json");
-  if (!Array.isArray(listed)) throw new EnvironmentError("Paseo CLI global agent list was not an array.");
-  const matches = listed.filter((entry): entry is Record<string, unknown> =>
-    Boolean(entry && typeof entry === "object" && cliField(entry as Record<string, unknown>, "id", "Id") === input.agentId));
-  if (matches.length !== 1) throw new EnvironmentError(`Paseo CLI global list did not contain exactly one agent ${input.agentId}.`);
-  const listedCwd = cliField(matches[0], "cwd", "Cwd");
-  const listedName = cliField(matches[0], "name", "Name", "title", "Title");
-  if (typeof listedCwd !== "string" || normalizedDirectory(listedCwd) !== normalizedDirectory(agent.cwd)) {
-    throw new EnvironmentError(`Paseo CLI global list cwd does not match agent ${input.agentId} in workspace ${input.workspaceId}.`);
-  }
-  if (listedName !== null && typeof listedName !== "string") throw new EnvironmentError("Paseo CLI global list returned an invalid agent name.");
-
+  // Read the CLI view by id. `ls --global` is capped at 20 agents by default, so it cannot be used
+  // to find an arbitrary agent.
+  const inspectOutput = await runCli(["inspect", input.agentId, "--json"]);
   const inspected = parseCliJson(inspectOutput, `inspect ${input.agentId} --json`);
   if (!inspected || typeof inspected !== "object") throw new EnvironmentError(`Paseo CLI inspect returned no agent ${input.agentId}.`);
   const detail = inspected as Record<string, unknown>;
@@ -175,12 +161,12 @@ async function observeRenameTarget(
     throw new EnvironmentError(`Paseo CLI inspect cwd does not match agent ${input.agentId} in workspace ${input.workspaceId}.`);
   }
   if (inspectedName !== null && typeof inspectedName !== "string") throw new EnvironmentError("Paseo CLI inspect returned an invalid agent name.");
-  if (listedName === undefined || inspectedName === undefined) throw new EnvironmentError("Paseo CLI did not expose the agent name needed for safe rename verification.");
-  return { agent, cliListName: listedName as string | null, cliInspectName: inspectedName as string | null };
+  if (inspectedName === undefined) throw new EnvironmentError("Paseo CLI did not expose the agent name needed for safe rename verification.");
+  return { agent, cliInspectName: inspectedName as string | null };
 }
 
 const titleMatches = (observation: RenameObservation, title: string | null): boolean =>
-  observation.agent.title === title && observation.cliListName === title && observation.cliInspectName === title;
+  observation.agent.title === title && observation.cliInspectName === title;
 
 type TitleUpdateResult = { applied: boolean | null; error: string | null };
 
@@ -227,7 +213,7 @@ async function applyVerifiedAgentTitle(
   }
 
   // A failed command may have mutated before exiting. Retry readback once; rollback only if all
-  // three public/native views now agree on the exact new title and manager state is still current.
+  // both the SDK and CLI views now agree on the exact new title and manager state is still current.
   if (!after || !titleMatches(after, input.previousTitle)) {
     try { after = await observe(); } catch (error) { readbackError = error; }
     if (after && titleMatches(after, input.requestedTitle)) {

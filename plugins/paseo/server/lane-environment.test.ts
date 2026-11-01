@@ -65,7 +65,8 @@ function titleCli(agents: Map<string, FakeAgent>, options: { staleInspectAfterUp
     calls.push(command);
     if (options.unavailable) throw new Error("spawn paseo ENOENT");
     if (command[0] === "ls" && command[1] === "--global") {
-      return JSON.stringify([...agents.values()].map((agent) => ({
+      // Mirrors the real CLI, which caps the default global listing at 20 agents.
+      return JSON.stringify([...agents.values()].slice(0, 20).map((agent) => ({
         id: agent.id, name: agent.title, cwd: options.wrongCwd && agent.id === "m1" ? "/repo/two" : agent.cwd,
       })));
     }
@@ -619,7 +620,19 @@ describe("lane environment lifecycle", () => {
       expect(fake.agents.get("m1")?.title).toBe("[former Lane Manager] Ship it");
       expect(cli.calls).toContainEqual(["agent", "update", "m1", "--name", "[former Lane Manager] Ship it", "--json"]);
       expect(cli.calls).toContainEqual(["inspect", "m1", "--json"]);
-      expect(cli.calls).toContainEqual(["ls", "--global", "--json"]);
+      expect(cli.calls.some((args) => args[0] === "ls")).toBe(false);
+    });
+
+    it("renames the previous manager even when it is beyond the CLI's 20-agent global list", async () => {
+      const older: FakeAgent[] = Array.from({ length: 25 }, (_, index) => ({ ...manager, id: `old${index}`, title: `Old ${index}` }));
+      const fake = fakePaseo({ agents: [...older, manager] });
+      const cli = titleCli(fake.agents);
+      const env = service({}, path.join(dir, "state.json"), cli.run);
+      await env.onWorkspaceCreated({ id: "ws1" });
+      await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "m1" });
+      const result = await env.continueManager(fake.paseo, { workspaceId: "ws1", fromAgentId: "m1", checkpoint: "Decisions: X" });
+      expect(result).toMatchObject({ titleApplied: true, titleError: null, advisoryTitle: "[former Lane Manager] Ship it" });
+      expect(fake.agents.get("m1")?.title).toBe("[former Lane Manager] Ship it");
     });
 
     it("renames a demoted manager on explicit assignment", async () => {
