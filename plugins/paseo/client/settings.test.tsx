@@ -9,6 +9,8 @@ const state = vi.hoisted(() => ({
   routingPolicyRpc: vi.fn(), saveRoutingPolicyRpc: vi.fn(),
   settingsSave: vi.fn(),
   panConfigs: [] as any[],
+  agentConfigContexts: [] as { agent: string; thinkingOptionId: string; showModel?: boolean; showThinking?: boolean }[],
+  roleSettings: [] as { id: string; name: string; type?: "planner" | "worker" }[],
   routingPolicy: { version: 1, providerOrder: ["codex", "opencode", "claude"],
     modelOrder: { manager: ["codex/manager", "opencode/manager"], dev: ["codex/dev", "claude/dev"] },
     reasoningEffortOrder: ["low", "medium", "high"], warningThresholds: [80, 90], handoffThreshold: 95 },
@@ -27,7 +29,9 @@ vi.mock("@getpaseo/plugin/client", () => ({
         : rpc.name === "clips.model-routing-policy" ? state.routingPolicyRpc : state.saveRoutingPolicyRpc,
   usePaseo: () => ({ providers: { snapshot: async () => ({ entries: [{ provider: "codex", label: "Codex", status: "ready", enabled: true,
     models: [{ id: "model", isSelectable: true, thinkingOptions: [{ id: "high" }] }] }] }) } }),
-  useSettings: () => ({ status: "ready", values, revision: "r3", saving: false, saveError: null, save: state.settingsSave }),
+  useSettings: (definition: { id?: string }) => definition?.id === "agent-roles"
+    ? ({ status: "ready", values: { roles: state.roleSettings }, revision: "r3", saving: false, saveError: null, save: state.settingsSave })
+    : ({ status: "ready", values, revision: "r3", saving: false, saveError: null, save: state.settingsSave }),
 }));
 vi.mock("@getpaseo/plugin/client/ui", async () => {
   const { createElement: h } = await import("react");
@@ -68,10 +72,15 @@ vi.mock("@getpaseo/plugin/client/react-native", async () => {
 });
 vi.mock("./agent-configuration", async () => {
   const { createElement: h } = await import("react");
-  return { AgentConfigFields: (props: any) => h("div", {},
+  return { AgentConfigFields: (props: any) => {
+    state.agentConfigContexts.push({ agent: props.agent, thinkingOptionId: props.thinkingOptionId,
+      showModel: props.showModel, showThinking: props.showThinking });
+    return h("div", {},
+    props.showModel === false ? null :
     h("label", {}, "Paseo agent", h("select", { "aria-label": "Paseo agent", value: props.agent,
       onChange: (event: any) => props.onAgentChange(event.target.value) },
       h("option", { value: "" }, "Automatic"), h("option", { value: "codex/model" }, "codex/model"))),
+    props.showThinking === false ? null :
     h("label", {}, "Thinking", h("select", { "aria-label": "Thinking", value: props.thinkingOptionId,
       onChange: (event: any) => props.onThinkingChange(event.target.value) },
       h("option", { value: "" }, "Paseo default"), h("option", { value: "high" }, "High"), h("option", { value: "medium" }, "Medium"))),
@@ -79,7 +88,7 @@ vi.mock("./agent-configuration", async () => {
       onChange: (event: any) => props.onModeChange(event.target.value) },
       h("option", { value: "full-access" }, "Full access"), h("option", { value: "restricted" }, "Restricted"))),
     h("button", { "aria-label": "Clear provider features", onClick: () => props.onFeatureValuesChange({}) }, "Clear features"),
-  ) };
+  ); } };
 });
 vi.mock("@tanstack/react-query", async () => {
   return {
@@ -111,6 +120,11 @@ let root: Root;
 beforeEach(() => {
   vi.clearAllMocks();
   state.panConfigs = [];
+  state.agentConfigContexts = [];
+  state.roleSettings = [];
+  state.routingPolicy = { version: 1, providerOrder: ["codex", "opencode", "claude"],
+    modelOrder: { manager: ["codex/manager", "opencode/manager"], dev: ["codex/dev", "claude/dev"] },
+    reasoningEffortOrder: ["low", "medium", "high"], warningThresholds: [80, 90], handoffThreshold: 95 };
   state.projectRpc.mockResolvedValue({ projects: [] });
   state.boardRpc.mockResolvedValue({ collaboration: { enabled: false, state: "disabled", scope: "project" } });
   state.collaborationRpc.mockResolvedValue({});
@@ -140,36 +154,43 @@ const select = async (label: string, value: string) => act(async () => {
 });
 
 describe("Settings subviews", () => {
-  it("allows copying a legacy/global role value into the selected provider slot", async () => {
-    await render(); await act(async () => { button("Lane Manager").click(); }); await render();
-    expect(button("Save provider defaults").disabled).toBe(false);
-    await act(async () => { button("Save provider defaults").click(); });
-    expect(state.saveRoleDefaultsRpc).toHaveBeenCalledWith({ role: "manager", provider: "codex", model: "model", reasoningEffort: "high" });
-  });
-
-  it("saves explicit Automatic, empty feature values, and full access instead of falling back to untouched values", async () => {
-    await render(); await act(async () => { button("Lane Manager").click(); }); await render();
-    await select("Paseo agent", ""); await select("Thinking", ""); await select("Permission mode", "full-access");
-    await act(async () => { button("Clear features").click(); });
-    await act(async () => { button("Save provider defaults").click(); });
-    expect(state.settingsSave).toHaveBeenCalledWith(expect.objectContaining({ roles: expect.objectContaining({
-      manager: expect.objectContaining({ legacyModelMigrated: true, featureValues: {}, modeId: "full-access" }),
-    }) }), "r3");
-    expect(state.saveRoleDefaultsRpc).toHaveBeenCalledWith({ role: "manager", provider: "codex", model: "", reasoningEffort: "" });
-  });
-
   it("renders padded settings content and exposes the ordered routing policy editor", async () => {
     for (const width of [390, 1440]) {
       await act(async () => { Object.defineProperty(window, "innerWidth", { configurable: true, value: width }); });
       await render();
       if (!container.querySelector('input[aria-label="Usage warning thresholds (%)"]')) {
-        await act(async () => { button("Routing").click(); }); await render();
+        await act(async () => { button("Model Routing").click(); }); await render();
       }
-      expect(container.textContent).toContain("Provider-specific role defaults are configured");
+      expect(container.textContent).toContain("Each role has one ranked model order");
+      expect(container.textContent).toContain("Model Routing");
+      expect(container.textContent).not.toContain("Save provider defaults");
+      expect(Array.from(container.querySelectorAll("button")).map((item) => item.textContent)).not.toContain("Lane Manager");
+      expect(Array.from(container.querySelectorAll("button")).map((item) => item.textContent)).not.toContain("Lane Dev");
       expect(container.querySelector<HTMLInputElement>('input[aria-label="Usage warning thresholds (%)"]')?.placeholder).toBe("80, 90");
       const padded = Array.from(container.querySelectorAll("div")).find((item) => item.style.padding === "8px" || item.style.padding === "16px");
       expect(padded, `settings card padding at ${width}px`).toBeTruthy();
     }
+  });
+
+  it("keeps one model and effort editor per Lane role while retaining inline permission controls", async () => {
+    await render();
+    expect(container.textContent).toContain("Model Routing");
+    expect(container.textContent.match(/Lane Manager model order/g)).toHaveLength(1);
+    expect(container.textContent.match(/Lane Dev model order/g)).toHaveLength(1);
+    expect(container.querySelector('button[aria-label="Lane Manager"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Lane Dev"]')).toBeNull();
+    expect(container.querySelector('select[aria-label="Paseo agent"]')).toBeNull();
+    expect(container.querySelector('select[aria-label="Thinking"]')).toBeNull();
+    expect(container.querySelectorAll('select[aria-label="Permission mode"]')).toHaveLength(2);
+  });
+
+  it("loads inline provider options with each role's ranked model and saved effort context", async () => {
+    state.routingPolicy = { ...state.routingPolicy, modelEffort: {
+      manager: { "codex/manager": "high" }, dev: { "codex/dev": "low" },
+    } };
+    await render();
+    expect(state.agentConfigContexts).toContainEqual({ agent: "codex/manager", thinkingOptionId: "high", showModel: false, showThinking: false });
+    expect(state.agentConfigContexts).toContainEqual({ agent: "codex/dev", thinkingOptionId: "low", showModel: false, showThinking: false });
   });
 
   it("does not offer repository selection or collaboration in global settings", async () => {
@@ -182,7 +203,7 @@ describe("Settings subviews", () => {
 
   it("saves the dragged order of all four lists without changing thresholds", async () => {
     await render();
-    await act(async () => { button("Routing").click(); });
+    await act(async () => { button("Model Routing").click(); });
     expect(button("Save routing policy").disabled).toBe(true);
     const drags = [state.panConfigs[0], state.panConfigs[3], state.panConfigs[5], state.panConfigs[7]];
     for (const drag of drags) {
@@ -201,9 +222,22 @@ describe("Settings subviews", () => {
     });
   });
 
+  it("renders custom role routing rows and preserves unknown routing-policy metadata on save", async () => {
+    state.roleSettings = [{ id: "reviewer", name: "Reviewer" }];
+    state.routingPolicy = { ...state.routingPolicy, extension: { owner: "external" } };
+    await render();
+    await act(async () => { button("Model Routing").click(); });
+    expect(container.textContent).toContain("Reviewer model order");
+    await act(async () => { button("Move codex down").click(); });
+    await act(async () => { button("Save routing policy").click(); });
+    expect(state.saveRoutingPolicyRpc).toHaveBeenCalledWith(expect.objectContaining({
+      extension: { owner: "external" }, modelOrder: expect.objectContaining({ reviewer: [] }),
+    }));
+  });
+
   it("offers ready providers, their selectable models and reasoning levels from the live catalog in pickers", async () => {
     await render();
-    await act(async () => { button("Routing").click(); });
+    await act(async () => { button("Model Routing").click(); });
     expect(container.querySelector('input[aria-label="Add to Provider order"]')).toBeNull();
     expect(container.textContent).toContain("Ready providers: codex, antigravity");
     const open = async (trigger: string) => {
@@ -227,7 +261,7 @@ describe("Settings subviews", () => {
 
   it("saves a reasoning effort chosen next to a ranked model, only for models that offer one", async () => {
     await render();
-    await act(async () => { button("Routing").click(); });
+    await act(async () => { button("Model Routing").click(); });
     await addFrom("Add model", "Codex · model");
     await addFrom("Add model", "Antigravity · Gemini 4 Argon (High)");
     const trigger = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label^="${label}"]`)!;
@@ -244,7 +278,7 @@ describe("Settings subviews", () => {
 
   it("marks only an effort change as a pending routing change", async () => {
     await render();
-    await act(async () => { button("Routing").click(); });
+    await act(async () => { button("Model Routing").click(); });
     expect(button("Save routing policy").disabled).toBe(true);
     await addFrom("Add model", "Codex · model");
     await act(async () => { button("Remove codex/model").click(); });
@@ -261,7 +295,7 @@ describe("Settings subviews", () => {
   it("retains reordered rows and reports a failed save", async () => {
     state.saveRoutingPolicyRpc.mockRejectedValueOnce(new Error("Cannot save policy"));
     await render();
-    await act(async () => { button("Routing").click(); });
+    await act(async () => { button("Model Routing").click(); });
     await act(async () => { button("Move codex down").click(); });
     await act(async () => { button("Save routing policy").click(); });
     expect(container.textContent).toContain("Cannot save policy");

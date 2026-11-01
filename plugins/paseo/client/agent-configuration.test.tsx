@@ -41,7 +41,7 @@ let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 const onSubmit = vi.fn();
 beforeEach(() => {
-  vi.clearAllMocks(); state.roleError = null; state.roles = [{ id: "qa", name: "QA Reviewer", description: "Review changes", candidates: [{ agent: "openai/model", metered: true }] }];
+  vi.clearAllMocks(); state.roleError = null; state.roles = [{ id: "qa", name: "QA Reviewer", description: "Review changes" }];
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true; container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
@@ -54,14 +54,20 @@ const button = (label: string) => {
     .find((item) => item.getAttribute("aria-label") === label || item.textContent === label);
   expect(result, label).toBeTruthy(); return result!;
 };
+const select = async (label: string, value: string) => act(async () => {
+  const element = Array.from(container.querySelectorAll<HTMLSelectElement>("select")).find((item) => item.getAttribute("aria-label") === label);
+  expect(element, label).toBeTruthy();
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(element, value);
+  element!.dispatchEvent(new Event("change", { bubbles: true }));
+});
 
 describe("role-aware agent launch", () => {
   it("uses the selected role’s ordered resolver while keeping the work prompt separate", async () => {
     await render();
-    expect(container.textContent).toContain("QA Reviewer · 1 ordered choices");
+    expect(container.textContent).toContain("Review changes worker role defaults apply. Model order comes from Model Routing.");
     expect(container.textContent).not.toContain("Manual provider fields");
     await act(async () => { button("Start agent").click(); });
-    expect(onSubmit).toHaveBeenCalledWith(undefined, "qa", false);
+    expect(onSubmit).toHaveBeenCalledWith(undefined, "qa");
   });
 
   it("retains exact manual provider/model and permission options as an explicit role override", async () => {
@@ -72,15 +78,14 @@ describe("role-aware agent launch", () => {
     expect(container.textContent).toContain("Previously saved model (currently unavailable)");
     expect(container.textContent).not.toContain("openai/manual");
     await act(async () => { button("Start agent").click(); });
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ provider: "openai/manual", modeId: "full-access" }), "qa", false);
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ provider: "openai/manual", modeId: "full-access" }), "qa");
   });
 
-  it("requires a separate per-launch opt-in before trying a metered role candidate", async () => {
+  it("allows selecting manual launch without a role", async () => {
     await render();
-    const approvals = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
-    expect(approvals).toHaveLength(2);
-    await act(async () => { approvals[1].click(); });
+    await select("Launch as", "");
+    expect(container.textContent).toContain("Paseo agent");
     await act(async () => { button("Start agent").click(); });
-    expect(onSubmit).toHaveBeenCalledWith(undefined, "qa", true);
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ provider: "openai/manual", modeId: "full-access" }), undefined);
   });
 });

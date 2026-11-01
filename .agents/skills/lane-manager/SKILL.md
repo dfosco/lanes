@@ -9,6 +9,8 @@ description: >-
   Delegate through the current harness's native primitives. If no delegation
   primitive exists, implement and verify authorized work linearly. External
   attention, intake, PR preparation and proposed routing belong to lane-radar.
+  In Lanes requests, "planner" refers to this coordination role; it does not
+  select plan-only delivery.
 metadata:
   author: Daniel Fosco
   version: "2026.10.24.1"

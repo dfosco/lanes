@@ -178,6 +178,40 @@ describe('Lane worker configuration', () => {
       expect(() => setModelRoutingPolicy({ ...policy, providerOrder: ['codex', 'codex'] }, { scope: 'user' })).toThrow(/unique/);
     });
 
+    it('round-trips custom role orders and per-role efforts without leaking them between scopes', () => {
+      const { root } = workspace(null);
+      const userStore = path.join(root, 'user-store');
+      vi.stubEnv('HOME', root);
+      vi.stubEnv('LANES_HOME', userStore);
+      vi.stubEnv('CLIPS_HOME', '');
+      const project = {
+        version: 1, providerOrder: ['codex'],
+        modelOrder: { manager: ['codex/manager'], dev: [], 'design-engineer': ['codex/design'], 'deep-reasoning': ['claude/opus'] },
+        modelEffort: { 'design-engineer': { 'codex/design': 'high' }, 'deep-reasoning': { 'claude/opus': 'xhigh' } },
+        reasoningEffortOrder: ['low', 'high', 'xhigh'], warningThresholds: [80, 90], handoffThreshold: 95,
+      };
+      const user = { ...project, providerOrder: ['claude'], modelOrder: { manager: [], dev: ['claude/dev'], 'design-engineer': ['claude/design'] },
+        modelEffort: { 'design-engineer': { 'claude/design': 'medium' } } };
+
+      expect(setModelRoutingPolicy(project, { scope: 'project', repoRoot: root })).toEqual(project);
+      expect(setModelRoutingPolicy(user, { scope: 'user' })).toEqual(user);
+      expect(getModelRoutingPolicy(root)).toEqual(project);
+      expect(getModelRoutingPolicy(root, { scope: 'user' })).toEqual(user);
+      expect(JSON.parse(fs.readFileSync(getConfigPath(root), 'utf8')).model_routing_policy.modelOrder['deep-reasoning'])
+        .toEqual(['claude/opus']);
+    });
+
+    it('rejects invalid custom routing keys and efforts attached to another role order', () => {
+      const { root } = workspace(null);
+      const policy = { version: 1, providerOrder: [], modelOrder: { manager: [], dev: [], 'design-engineer': ['codex/design'] },
+        reasoningEffortOrder: ['low', 'high'], warningThresholds: [80, 90], handoffThreshold: 95 };
+      expect(() => setModelRoutingPolicy({ ...policy, modelOrder: { ...policy.modelOrder, '../bad': [] } }, { scope: 'user' }))
+        .toThrow(/role keys/);
+      expect(() => setModelRoutingPolicy({ ...policy, modelEffort: { dev: { 'codex/design': 'high' } } }, { scope: 'user' }))
+        .toThrow(/not in the dev modelOrder/);
+      expect(fs.existsSync(getConfigPath(root))).toBe(false);
+    });
+
     it('persists optional per-entry reasoning efforts and rejects ones that are not ranked or malformed', () => {
       const { root } = workspace(null);
       vi.stubEnv('HOME', root);
@@ -189,12 +223,12 @@ describe('Lane worker configuration', () => {
       expect(setModelRoutingPolicy(withEffort, { scope: 'user' }).modelEffort).toEqual({ manager: { 'codex/gpt-6.1-sol': 'high' }, dev: {} });
       expect(getModelRoutingPolicy(root, { scope: 'user' }).modelEffort.manager).toEqual({ 'codex/gpt-6.1-sol': 'high' });
       expect(setModelRoutingPolicy({ ...policy, modelEffort: { dev: { 'claude/claude-haiku-5-5': 'low' } } }, { scope: 'user' }).modelEffort)
-        .toEqual({ manager: {}, dev: { 'claude/claude-haiku-5-5': 'low' } });
+        .toEqual({ dev: { 'claude/claude-haiku-5-5': 'low' } });
       expect(Object.hasOwn(setModelRoutingPolicy(policy, { scope: 'user' }), 'modelEffort')).toBe(false);
       expect(() => setModelRoutingPolicy({ ...policy, modelEffort: { manager: { 'codex/other': 'high' } } }, { scope: 'user' })).toThrow(/not in the manager modelOrder/);
       expect(() => setModelRoutingPolicy({ ...policy, modelEffort: { manager: { 'codex/gpt-6.1-sol': ' ' } } }, { scope: 'user' })).toThrow(/nonempty reasoning ID/);
-      expect(() => setModelRoutingPolicy({ ...policy, modelEffort: { qa: {} } }, { scope: 'user' })).toThrow(/manager and dev/);
-      expect(() => setModelRoutingPolicy({ ...policy, modelEffort: [] }, { scope: 'user' })).toThrow(/manager and dev/);
+      expect(() => setModelRoutingPolicy({ ...policy, modelEffort: { '../bad': {} } }, { scope: 'user' })).toThrow(/invalid role key/);
+      expect(() => setModelRoutingPolicy({ ...policy, modelEffort: [] }, { scope: 'user' })).toThrow(/must map role keys/);
     });
 
     it('rejects invalid values and malformed stored data without overwriting it', () => {

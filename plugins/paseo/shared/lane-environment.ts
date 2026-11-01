@@ -134,6 +134,9 @@ export const laneEnvironmentAssignManagerRpc = defineRpc({
     workspace: laneEnvironmentWorkspaceView,
     assignmentApplied: z.boolean(),
     assignmentError: z.string().nullable(),
+    /** Whether the role guidance was sent to the promoted session; null when there was nothing to send. */
+    guidanceDelivered: z.boolean().nullable().default(null),
+    guidanceError: z.string().nullable().default(null),
     /** Null means the requested title state could not be verified after a partial CLI failure. */
     titleApplied: z.boolean().nullable(),
     titleError: z.string().nullable(),

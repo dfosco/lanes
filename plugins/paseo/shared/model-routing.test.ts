@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { entryReasoningEffort, orderedRoleRoutes } from "./model-routing";
+import { entryReasoningEffort, orderedRoleRoutes, roleRouteAgents } from "./model-routing";
 import type { ModelRoutingPolicy } from "./contracts";
 
 const policy: ModelRoutingPolicy = {
@@ -43,6 +43,28 @@ describe("per-entry reasoning effort", () => {
   it("only applies an entry effort to the role and model it was saved for", () => {
     expect(entryReasoningEffort(withEffort, "dev", "claude", "sonnet", efforts, "medium", "low")).toBe("medium");
     expect(entryReasoningEffort(withEffort, "manager", "opencode", "sonnet", efforts, "medium", "low")).toBe("medium");
+  });
+  it("keeps custom role routes and efforts isolated from Lane Dev", () => {
+    const custom: ModelRoutingPolicy = {
+      ...policy,
+      modelOrder: { ...policy.modelOrder, reviewer: ["claude/sonnet"] },
+      modelEffort: { dev: { "claude/sonnet": "high" }, reviewer: { "claude/sonnet": "low" } },
+    };
+    expect(roleRouteAgents(custom, "reviewer")).toEqual([{ agent: "claude/sonnet", effort: "low" }]);
+    expect(roleRouteAgents({ ...custom, modelEffort: { dev: { "claude/sonnet": "high" } } }, "reviewer"))
+      .toEqual([{ agent: "claude/sonnet" }]);
+    expect(roleRouteAgents(custom, "unranked-role")).toEqual([]);
+  });
+  it("treats valid prototype-named custom roles as ordinary isolated keys", () => {
+    expect(roleRouteAgents(policy, "constructor")).toEqual([]);
+    const custom: ModelRoutingPolicy = {
+      ...policy,
+      modelOrder: { ...policy.modelOrder, constructor: ["claude/sonnet"] },
+      modelEffort: { constructor: { "claude/sonnet": "high" } },
+    };
+    expect(roleRouteAgents(custom, "constructor")).toEqual([{ agent: "claude/sonnet", effort: "high" }]);
+    expect(roleRouteAgents({ ...custom, modelEffort: {} }, "constructor")).toEqual([{ agent: "claude/sonnet" }]);
+    expect(roleRouteAgents(custom, "dev")).toEqual(roleRouteAgents(policy, "dev"));
   });
   it("keeps the previous default resolution when no entry effort is saved", () => {
     expect(entryReasoningEffort(policy, "dev", "codex", "m", ["low", "high"], "medium", "low")).toBe("low");

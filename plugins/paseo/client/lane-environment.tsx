@@ -132,7 +132,7 @@ export function LaneWorkspaceControls({ theme, hostId, workspaceId, agentId }: {
       cache.setQueryData(["clips.lane-environment.status", hostId, workspaceId], {
         storeRevision: result.storeRevision, workspace: result.workspace,
       });
-      setOperationError(result.assignmentApplied ? null : result.assignmentError ?? "Manager assignment was not applied.");
+      setOperationError(result.assignmentApplied ? result.guidanceError ?? null : result.assignmentError ?? "Manager assignment was not applied.");
       await cache.invalidateQueries({ queryKey: ["clips-runtime", hostId] });
     },
     onError: (error) => setOperationError(`Manager assignment failed: ${message(error)}`),
@@ -206,6 +206,7 @@ export function LaneWorkspaceControls({ theme, hostId, workspaceId, agentId }: {
         </Text> : null}
         {assignmentFeedback.formerManagerTitleError ? <Text style={{ color: theme.colors.statusWarning, fontSize: 12 }}>{assignmentFeedback.formerManagerTitleError}</Text> : null}
         {assignmentFeedback.assignmentError ? <Text style={{ color: theme.colors.statusDanger, fontSize: 12 }}>{assignmentFeedback.assignmentError}</Text> : null}
+        {assignmentFeedback.guidanceError ? <Text accessibilityRole="alert" style={{ color: theme.colors.statusWarning, fontSize: 12 }}>{assignmentFeedback.guidanceError}</Text> : null}
       </View> : null}
       {currentManager && currentManager.status === "idle" && status.data?.workspace.managerId ? <View style={{ gap: 7 }}>
         <Text style={{ color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}>Continue from a checkpoint</Text>

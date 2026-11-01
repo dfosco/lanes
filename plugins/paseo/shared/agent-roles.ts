@@ -1,116 +1,76 @@
 /**
  * Plugin-owned agent roles. Pure, shared by server, CLI and UI: no Node or React imports.
  *
- * A role is optional short instructions, optional skill references and an ordered list of
- * launch candidates. Presets are simply roles with neither instructions nor skills. Roles are
+ * A role is optional short instructions and optional skill references. Model order and reasoning effort
+ * come from the shared Routing policy, not from the role. Presets are roles with neither instructions nor skills. Roles are
  * host-scoped plugin settings; they are NOT native Paseo profiles and never read them.
  */
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
+import { RESERVED_ROUTING_KEYS } from "./model-routing";
 
 export const ROLE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,47}$/;
 /** Skill references name a skill directory only: lowercase kebab-case, so no path traversal is possible. */
 export const SKILL_REF_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
-export const MAX_QUOTA_PCT = 95;
-export const MAX_ROLE_CANDIDATES = 12;
 export const MAX_ROLE_SKILLS = 12;
 export const MAX_ROLE_INSTRUCTIONS = 4000;
+export const AGENT_ROLE_TYPES = ["planner", "worker"] as const;
+export type AgentRoleType = typeof AGENT_ROLE_TYPES[number];
 
 const featureValue = z.union([z.boolean(), z.string()]);
 
-/** A subset of the existing AgentConfiguration: an exact, fully qualified `provider/model`. */
-export const roleCandidate = z.object({
-  agent: z.string().trim().regex(/^[^/\s]+\/\S+$/, "Use a fully qualified provider/model ID such as claude/claude-sonnet-5-5."),
-  thinkingOptionId: z.string().trim().min(1).optional(),
-  modeId: z.string().trim().min(1).optional(),
-  featureValues: z.record(z.string(), featureValue).optional(),
-  /** Metered/paid routes are never used as an automatic fallback without per-launch approval. */
-  metered: z.boolean().optional(),
-}).strict();
-export type RoleCandidate = z.infer<typeof roleCandidate>;
-
-export const roleQuotaPolicy = z.object({
-  /** Ordered candidates stop being eligible at or above this maximum used window percentage. */
-  maxUsagePct: z.number().int().min(1).max(MAX_QUOTA_PCT).default(MAX_QUOTA_PCT),
-  /** Provider readings older than this are treated as unknown, never as zero. */
-  maxAgeMinutes: z.number().int().min(1).max(1440).default(30),
-  /** Explicit policy for unknown/stale/missing readings. */
-  whenUnknown: z.enum(["allow", "skip"]).default("allow"),
-}).strict();
-export type RoleQuotaPolicy = z.infer<typeof roleQuotaPolicy>;
 
 const skillRefs = z.array(z.string().trim().regex(SKILL_REF_PATTERN, "Invalid skill reference."))
   .max(MAX_ROLE_SKILLS)
   .transform((values) => [...new Set(values)]);
 
 export const agentRoleDefinition = z.object({
-  id: z.string().regex(ROLE_ID_PATTERN, "Role IDs use lowercase letters, digits and hyphens (max 48)."),
+  id: z.string().regex(ROLE_ID_PATTERN, "Role IDs use lowercase letters, digits and hyphens (max 48).")
+    .refine((id) => !RESERVED_ROUTING_KEYS.includes(id), "manager and dev are reserved for the Lane roles."),
   name: z.string().trim().min(1).max(80).regex(/^[^\x00-\x1f\x7f]+$/, "Names cannot contain control characters."),
   description: z.string().max(300).default(""),
   /** Increments whenever a saved change alters the role; consumers deliver instructions once per revision. */
   revision: z.number().int().min(1).default(1),
+  /** Responsibility classification only; absent legacy values are inferred without a settings rewrite. */
+  type: z.enum(AGENT_ROLE_TYPES).optional(),
   instructions: z.string().max(MAX_ROLE_INSTRUCTIONS).default(""),
   skills: skillRefs.default([]),
-  candidates: z.array(roleCandidate).max(MAX_ROLE_CANDIDATES).default([]),
-  quota: roleQuotaPolicy.prefault({}),
-}).strict().superRefine((role, ctx) => {
-  const seen = new Set<string>();
-  role.candidates.forEach((candidate, index) => {
-    const key = candidateKey(candidate);
-    if (seen.has(key)) ctx.addIssue({ code: "custom", path: ["candidates", index], message: "Duplicate launch candidate." });
-    seen.add(key);
-  });
+// Older saved roles may still contain the retired candidates/quota fields. Accept the
+// document and strip those fields from the parsed view; no settings write or migration occurs.
 });
 export type AgentRoleDefinition = z.infer<typeof agentRoleDefinition>;
 export type AgentRoleInput = z.input<typeof agentRoleDefinition>;
-
-export function candidateKey(candidate: RoleCandidate): string {
-  const features = Object.entries(candidate.featureValues ?? {}).sort(([a], [b]) => a.localeCompare(b));
-  return JSON.stringify([candidate.agent, candidate.thinkingOptionId ?? "", candidate.modeId ?? "", features]);
-}
+export const responsibilityType = (role: Pick<AgentRoleDefinition, "id" | "type">): AgentRoleType =>
+  role.type ?? (role.id === "lane-manager" ? "planner" : "worker");
 
 /**
- * Built-in definitions. Model IDs are only preferences: they are launched only when the live host
- * catalog reports them, and candidates can be reordered or replaced. Lane roles keep no
- * candidates so they continue to use the existing Lanes role-model defaults.
+ * Built-in definitions carry guidance only. Their model order is set in Routing.
  */
 export const BUILT_IN_ROLES: readonly AgentRoleInput[] = [
   {
-    id: "lane-manager", name: "Lane Manager", revision: 1,
+    id: "lane-manager", name: "Lane Manager", revision: 1, type: "planner",
     description: "Plans and coordinates delivery through the Lanes manager workflow.",
     instructions: "Act as the Lane Manager for this work. Delegate bounded implementation to top-level dev agents and review their evidence.",
     skills: ["lane-manager"],
   },
   {
-    id: "lane-dev", name: "Lane Dev", revision: 1,
+    id: "lane-dev", name: "Lane Dev", revision: 1, type: "worker",
     description: "Implements and verifies a bounded Lanes assignment.",
     instructions: "Act as the Lane Dev for this assignment. Stay within its scope and return evidence to the manager.",
     skills: ["lane-dev"],
   },
   {
-    id: "design-engineer", name: "Design Engineer", revision: 1,
+    id: "design-engineer", name: "UX Engineer", revision: 1, type: "worker",
     description: "Builds polished, accessible product UI.",
     instructions: "Act as a design engineer: build accessible, theme-aware interfaces, verify them in rendered form and keep visual detail consistent with the existing system.",
-    candidates: [
-      { agent: "claude/claude-sonnet-5-5", thinkingOptionId: "high" },
-      { agent: "claude/claude-opus-5-5", thinkingOptionId: "high" },
-    ],
   },
   {
-    id: "deep-reasoning", name: "Deep Reasoning", revision: 1,
+    id: "deep-reasoning", name: "Deep Reasoning", revision: 1, type: "worker",
     description: "Preset: prefer the strongest reasoning configuration. No role instructions.",
-    candidates: [
-      { agent: "claude/claude-opus-5-5", thinkingOptionId: "xhigh" },
-      { agent: "claude/claude-sonnet-5-5", thinkingOptionId: "max" },
-    ],
   },
   {
-    id: "fast-implementation", name: "Fast Implementation", revision: 1,
+    id: "fast-implementation", name: "Fast Implementation", revision: 1, type: "worker",
     description: "Preset: prefer quick, low-latency implementation. No role instructions.",
-    candidates: [
-      { agent: "claude/claude-sonnet-5-5", thinkingOptionId: "medium" },
-      { agent: "claude/claude-haiku-5-5", thinkingOptionId: "medium" },
-    ],
   },
 ];
 export const builtInRoleIds: readonly string[] = BUILT_IN_ROLES.map((role) => role.id!);
@@ -288,46 +248,33 @@ export const roleResolveInput = z.object({
   projectId: z.string().optional(),
   /** When set, the response includes this prompt with the role composed once. */
   workPrompt: z.string().optional(),
-  /** Explicit user-selected manual options win over role candidates; the role still contributes guidance. */
+  /** Explicit user-selected manual options win over the routing order; the role still contributes guidance. */
   agentConfig: z.object({
     provider: z.string(),
     thinkingOptionId: z.string().optional(),
     featureValues: z.record(z.string(), featureValue).default({}),
     modeId: z.string().optional(),
   }).optional(),
-  /** Approves metered fallbacks for this launch only. */
-  approveMetered: z.boolean().optional(),
 }).strict();
 export type RoleResolveInput = z.infer<typeof roleResolveInput>;
 
-export const roleUsageEvidence = z.object({
-  provider: z.string(),
-  state: z.enum(["known", "unknown"]),
-  maxUsedPct: z.number().nullable(),
-  window: z.string().nullable(),
-  fetchedAt: z.string().nullable(),
-  ageMinutes: z.number().nullable(),
-  reason: z.string().nullable(),
-});
-export type RoleUsageEvidence = z.infer<typeof roleUsageEvidence>;
 
 export const ROLE_ATTEMPT_CODES = [
-  "selected", "invalid_candidate", "provider_unavailable", "model_unavailable", "configuration_invalid",
-  "permission_escalation", "metered_not_approved", "quota_exhausted", "quota_unknown_skipped",
+  "selected", "provider_unavailable", "model_unavailable", "configuration_invalid",
+  "quota_unknown", "quota_handoff",
 ] as const;
 export const roleAttempt = z.object({
   index: z.number().int().nonnegative(),
   agent: z.string(),
   code: z.enum(ROLE_ATTEMPT_CODES),
   message: z.string(),
-  usage: roleUsageEvidence.nullable(),
 });
 export type RoleAttempt = z.infer<typeof roleAttempt>;
 
 export const roleResolution = z.object({
-  role: z.object({ id: z.string(), name: z.string(), revision: z.number() }),
-  /** candidate: ordered live resolution; defaults: no candidates, existing role defaults; manual: user options. */
-  source: z.enum(["candidate", "defaults", "manual"]),
+  role: z.object({ id: z.string(), name: z.string(), type: z.enum(AGENT_ROLE_TYPES), revision: z.number() }),
+  /** routing: first eligible entry in the Routing order; defaults: nothing ranked, existing role defaults; manual: user options. */
+  source: z.enum(["routing", "defaults", "manual"]),
   selectedIndex: z.number().int().nullable(),
   config: z.object({
     provider: z.string(), modeId: z.string(), thinkingOptionId: z.string().optional(),
@@ -345,7 +292,6 @@ export const roleResolution = z.object({
     delivery: z.literal("system_prompt"),
   }),
   attempts: z.array(roleAttempt),
-  quota: roleQuotaPolicy,
 });
 export type RoleResolution = z.infer<typeof roleResolution>;
 

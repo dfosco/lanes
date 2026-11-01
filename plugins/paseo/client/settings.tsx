@@ -1,28 +1,27 @@
 import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { usePaseo, useRpc, useSettings } from "@getpaseo/plugin/client";
-import { SettingsAction, SettingsCard, SettingsInput, SettingsSection, SettingsSelect } from "@getpaseo/plugin/client/ui";
+import { SettingsAction, SettingsCard, SettingsInput, SettingsSection } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import {
-  roleModelDefaultsRpc, saveRoleModelDefaultsRpc,
   modelRoutingPolicyRpc, saveModelRoutingPolicyRpc, preferences,
-  type AgentRole, type ModelRoutingPolicy, type Preferences,
+  type AgentRole, type ModelRoutingPolicy,
 } from "../shared/contracts";
-import { FULL_ACCESS_MODE } from "../shared/permission-modes";
+import { agentRolesSettings, responsibilityType, type AgentRoleDefinition } from "../shared/agent-roles";
+import { routingKeyForRole } from "../shared/model-routing";
 import { AgentConfigFields } from "./agent-configuration";
 import { AgentRolesSettings } from "./agent-roles";
 import { LaneEnvironmentSettings } from "./lane-environment";
 import { ResourceSettings } from "./resource-settings";
 import { SortableOrderEditor } from "./sortable-order";
-import { defaultProvider } from "../shared/work";
 
 type Theme = PluginSurfaceProps["theme"];
-type Section = "resources" | "routing" | "environment" | "agent-roles" | AgentRole;
+type Section = "resources" | "routing" | "environment" | "agent-roles";
 
 function Nav({ section, setSection, theme }: { section: Section; setSection: (section: Section) => void; theme: Theme }) {
   const items: [Section, string][] = [["environment", "Workspace mode"], ["agent-roles", "Agent roles"],
-    ["manager", "Lane Manager"], ["dev", "Lane Dev"], ["routing", "Routing"], ["resources", "Resources"]];
+    ["routing", "Model Routing"], ["resources", "Resources"]];
   return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
     {items.map(([value, label]) => <Pressable key={value} accessibilityRole="button" onPress={() => setSection(value)}
       style={{ borderWidth: 1, borderColor: section === value ? theme.colors.accent : theme.colors.border,
@@ -32,93 +31,43 @@ function Nav({ section, setSection, theme }: { section: Section; setSection: (se
   </View>;
 }
 
-function RoleSettings({ role, theme, hostId }: { role: AgentRole; theme: Theme; hostId: string }) {
-  const paseo = usePaseo();
+function RoleLaunchOptions({ role, agent, thinkingOptionId, theme, hostId }: {
+  role: AgentRole; agent: string; thinkingOptionId: string; theme: Theme; hostId: string;
+}) {
   const settings = useSettings(preferences);
-  const fetchDefaults = useRpc(roleModelDefaultsRpc);
-  const saveDefaults = useRpc(saveRoleModelDefaultsRpc);
   const values = settings.status === "ready" ? settings.values : preferences.schema.parse({});
   const settingsRevision = settings.status === "ready" ? settings.revision : "";
   const rolePrefs = values.roles[role];
-  const catalog = useQuery({ queryKey: ["clips.role-defaults.providers", hostId],
-    queryFn: async () => (await paseo.providers.snapshot()).entries });
-  const providerEntries = (catalog.data ?? []).filter((entry) => entry.status === "ready" && entry.enabled !== false);
-  const [selectedProvider, setSelectedProvider] = useState("");
-  const rememberedAgent = rolePrefs.provider || values.agent || defaultProvider(providerEntries) || "";
-  const preferredProvider = selectedProvider || rememberedAgent.split("/")[0] || "";
-  const providerId = providerEntries.some((entry) => entry.provider === preferredProvider)
-    ? preferredProvider : providerEntries[0]?.provider || "";
-  const query = useQuery({ queryKey: ["clips.role-defaults", role, providerId, rolePrefs.legacyModelMigrated],
-    queryFn: () => fetchDefaults({ role, provider: providerId, legacyDisabled: rolePrefs.legacyModelMigrated }), enabled: Boolean(providerId) });
-  const initial = query.data;
-  const [agent, setAgent] = useState<string | undefined>(undefined);
-  const [thinking, setThinking] = useState<string | undefined>(undefined);
-  const [featureValues, setFeatureValues] = useState<Record<string, string | boolean> | undefined>(undefined);
-  const [modeId, setModeId] = useState<string | undefined>(undefined);
+  const [featureValues, setFeatureValues] = useState<Record<string, string | boolean>>(rolePrefs.featureValues);
+  const [modeId, setModeId] = useState<string>(rolePrefs.modeId);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const modelAgent = agent ?? initial?.agent ?? "";
-  const effectiveThinking = thinking ?? initial?.reasoningEffort ?? "";
-  const effectiveFeatures = featureValues ?? rolePrefs.featureValues;
-  const effectiveMode = modeId ?? rolePrefs.modeId;
-  const changed = Boolean(initial && (modelAgent !== (initial.agent ?? "") || effectiveThinking !== initial.reasoningEffort ||
-    JSON.stringify(effectiveFeatures) !== JSON.stringify(rolePrefs.featureValues) || effectiveMode !== rolePrefs.modeId));
+  useEffect(() => {
+    setFeatureValues(rolePrefs.featureValues);
+    setModeId(rolePrefs.modeId);
+    setError(null);
+  }, [role, settingsRevision]);
+  const changed = JSON.stringify(featureValues) !== JSON.stringify(rolePrefs.featureValues) || modeId !== rolePrefs.modeId;
   const save = async () => {
-    if (!initial) return;
     setSaving(true); setError(null);
-    const legacyDisabledPrefs: Preferences = { ...values, roles: { ...values.roles,
-      [role]: { ...rolePrefs, legacyModelMigrated: true, featureValues: effectiveFeatures, modeId: effectiveMode } } };
     try {
-      const savedMarker = await settings.save(legacyDisabledPrefs, settingsRevision);
-      if (!savedMarker) {
-        setError(`Could not record that ${role} legacy defaults were retired. No canonical model keys were changed.`);
-        return;
-      }
-      const model = (agent ?? modelAgent).includes("/") ? (agent ?? modelAgent).slice((agent ?? modelAgent).indexOf("/") + 1) : (agent ?? modelAgent);
-      try {
-        await saveDefaults({ role, provider: providerId, model, reasoningEffort: effectiveThinking });
-      } catch (writeError) {
-        setError(`Legacy fallback is disabled. ${writeError instanceof Error ? writeError.message : String(writeError)}`);
-        return;
-      }
-      await query.refetch();
-      setAgent(undefined); setThinking(undefined); setFeatureValues(undefined); setModeId(undefined);
+      const saved = await settings.save({ ...values, roles: { ...values.roles,
+        [role]: { ...rolePrefs, featureValues, modeId } } }, settingsRevision);
+      if (!saved) { setError("Role options changed or could not be saved. Your edits are preserved; reload before retrying."); return; }
     } catch (saveError) {
-      setError(`Role preference marker save failed: ${saveError instanceof Error ? saveError.message : String(saveError)}. Canonical model keys were not changed.`);
+      setError(`Role options save failed: ${saveError instanceof Error ? saveError.message : String(saveError)}`);
     } finally { setSaving(false); }
   };
-  return <SettingsSection title={role === "manager" ? "Lane Manager defaults" : "Lane Dev defaults"}>
-    <SettingsCard>
-      <View style={{ padding: 8, gap: 10 }}>
-      {catalog.isLoading || query.isLoading ? <ActivityIndicator color={theme.colors.foregroundMuted} /> : null}
-      {catalog.isError ? <Text style={{ color: theme.colors.statusDanger }}>Paseo providers unavailable: {String(catalog.error)}</Text> : null}
-      {providerEntries.length ? <SettingsSelect label="Provider" hint="Defaults are stored independently for each provider."
-        value={providerId} options={providerEntries.map((entry) => ({ value: entry.provider, label: entry.label ?? entry.provider }))}
-        onValueChange={(value) => { setSelectedProvider(value); setAgent(undefined); setThinking(undefined); setFeatureValues(undefined); setModeId(undefined); }} /> : null}
-      {query.isError ? <Text style={{ color: theme.colors.statusDanger }}>Lanes defaults unavailable: {String(query.error)}</Text> : null}
-      {initial ? <>
-        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>
-          Saved as this provider’s Lanes user default. A project-specific setting takes precedence. Changes apply to newly created sessions; running sessions keep their current configuration.
-          {initial.source === "legacy" ? " Showing the previous single agent preference until you save this role." : ""}
-        </Text>
-        <AgentConfigFields theme={theme} hostId={hostId} agent={modelAgent} thinkingOptionId={effectiveThinking}
-          providerId={providerId}
-          featureValues={effectiveFeatures}
-          modeId={effectiveMode}
-          onAgentChange={(value) => { setAgent(value); setThinking(""); setFeatureValues({}); setModeId(FULL_ACCESS_MODE); }}
-          onThinkingChange={setThinking} onFeatureValuesChange={setFeatureValues} onModeChange={setModeId}
-          allowAutomatic modelHint="Automatic clears this provider’s user override. Project and legacy global defaults remain fallbacks." />
-        <SettingsAction label="Lanes user model defaults" hint={error ?? (initial.source === "project"
-          ? "The selected project's model setting currently overrides the user default."
-          : `Current source: ${initial.source}. Existing sessions are not reconfigured.`)}
-          actionLabel={saving ? "Saving…" : "Save provider defaults"}
-          disabled={saving || (!changed && initial.source !== "user")} onPress={() => void save()} />
-      </> : null}
-      {!providerEntries.length && !catalog.isLoading && !catalog.isError
-        ? <Text style={{ color: theme.colors.statusDanger }}>No ready Paseo provider is available.</Text> : null}
-      </View>
-    </SettingsCard>
-  </SettingsSection>;
+  return <View style={{ gap: 7, paddingLeft: 10 }}>
+    <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Role permission and provider options, using the first ranked model: {agent}</Text>
+    <AgentConfigFields theme={theme} hostId={hostId} agent={agent} thinkingOptionId={thinkingOptionId} featureValues={featureValues}
+      modeId={modeId} onAgentChange={() => undefined} onThinkingChange={() => undefined}
+      onFeatureValuesChange={setFeatureValues} onModeChange={setModeId} allowAutomatic={false}
+      showModel={false} showThinking={false} />
+    <SettingsAction label={`${role === "manager" ? "Planner" : "Worker"} options`} hint={error ?? "Permission mode and provider options are saved for new role launches."}
+      actionLabel={saving ? "Saving…" : "Save role options"} disabled={saving || !changed}
+      onPress={() => void save()} />
+  </View>;
 }
 
 const emptyRoutingPolicy: ModelRoutingPolicy = {
@@ -127,58 +76,81 @@ const emptyRoutingPolicy: ModelRoutingPolicy = {
   warningThresholds: [80, 90], handoffThreshold: 95,
 };
 
+/** One model-order editor per routing key: the Lane roles first, then every plugin role. */
+function routingEntries(roles?: readonly Pick<AgentRoleDefinition, "id" | "name" | "type">[]): { key: string; label: string; role?: AgentRole }[] {
+  const entries: { key: string; label: string; role?: AgentRole }[] = [
+    { key: "manager", label: "Lane Manager", role: "manager" }, { key: "dev", label: "Lane Dev", role: "dev" },
+  ];
+  for (const role of roles ?? []) {
+    const key = routingKeyForRole(role.id);
+    if (!entries.some((entry) => entry.key === key)) entries.push({ key, label: `${responsibilityType(role)} · ${role.name}` });
+  }
+  return entries;
+}
+
+type RoutingDraft = {
+  providerOrder: string; reasoningOrder: string; warnings: string; handoff: string;
+  lists: Record<string, string>; efforts: Record<string, Record<string, string>>;
+};
+const emptyRoutingDraft: RoutingDraft = {
+  providerOrder: "", reasoningOrder: "", warnings: "80, 90", handoff: "95",
+  lists: {}, efforts: {},
+};
+const ownValue = <T,>(record: Record<string, T> | undefined, key: string): T | undefined =>
+  record && Object.hasOwn(record, key) ? record[key] : undefined;
+const splitList = (value: string | undefined) => (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+const draftFromPolicy = (policy: ModelRoutingPolicy): RoutingDraft => ({
+  providerOrder: policy.providerOrder.join(", "), reasoningOrder: policy.reasoningEffortOrder.join(", "),
+  warnings: policy.warningThresholds.join(", "), handoff: String(policy.handoffThreshold),
+  lists: Object.fromEntries(Object.entries(policy.modelOrder).map(([key, models]) => [key, models.join(", ")])),
+  efforts: policy.modelEffort ?? {},
+});
+/** The policy as saved: effort is kept only on ranked entries; an entry without one uses the provider/role default. */
+function buildRoutingPolicy(draft: RoutingDraft, keys: readonly string[]) {
+  const modelOrder = Object.fromEntries(keys.map((key) => [key, splitList(ownValue(draft.lists, key))]));
+  const hasAnyEffort = keys.some((key) => Object.keys(ownValue(draft.efforts, key) ?? {}).length > 0);
+  const modelEffort = Object.fromEntries(keys.map((key) => {
+    const roleEfforts = ownValue(draft.efforts, key) ?? {};
+    const efforts = Object.fromEntries((modelOrder[key] ?? []).filter((item) => Object.hasOwn(roleEfforts, item) && roleEfforts[item])
+      .map((item) => [item, roleEfforts[item]!]));
+    return [key, efforts];
+  }));
+  return {
+    version: 1 as const, providerOrder: splitList(draft.providerOrder), modelOrder,
+    ...(hasAnyEffort ? { modelEffort } : {}),
+    reasoningEffortOrder: splitList(draft.reasoningOrder),
+    warningThresholds: draft.warnings.split(",").map((item) => Number(item.trim())),
+    handoffThreshold: Number(draft.handoff.trim()),
+  };
+}
+
 function RoutingSettings({ theme, hostId }: { theme: Theme; hostId: string }) {
   const paseo = usePaseo();
   const readPolicy = useRpc(modelRoutingPolicyRpc);
   const writePolicy = useRpc(saveModelRoutingPolicyRpc);
   const policyQuery = useQuery({ queryKey: ["clips.model-routing-policy", hostId], queryFn: () => readPolicy({}) });
   const catalog = useQuery({ queryKey: ["clips.routing.providers", hostId], queryFn: async () => (await paseo.providers.snapshot()).entries });
+  const roleSettings = useSettings(agentRolesSettings);
   const readyProviders = (catalog.data ?? []).filter((entry) => entry.status === "ready" && entry.enabled !== false);
-  const [providerOrder, setProviderOrder] = useState("");
-  const [managerModels, setManagerModels] = useState("");
-  const [devModels, setDevModels] = useState("");
-  const [managerEfforts, setManagerEfforts] = useState<Record<string, string>>({});
-  const [devEfforts, setDevEfforts] = useState<Record<string, string>>({});
-  const [reasoningOrder, setReasoningOrder] = useState("");
-  const [warnings, setWarnings] = useState("80, 90");
-  const [handoff, setHandoff] = useState("95");
+  const entries = routingEntries(roleSettings?.status === "ready" && Array.isArray(roleSettings?.values?.roles) ? roleSettings.values.roles : []);
+  const [draft, setDraft] = useState<RoutingDraft>(() => policyQuery.data ? draftFromPolicy(policyQuery.data) : emptyRoutingDraft);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const policy = policyQuery.data ?? emptyRoutingPolicy;
   useEffect(() => {
-    if (!policyQuery.data) return;
-    setProviderOrder(policyQuery.data.providerOrder.join(", "));
-    setManagerModels(policyQuery.data.modelOrder.manager.join(", "));
-    setDevModels(policyQuery.data.modelOrder.dev.join(", "));
-    setManagerEfforts(policyQuery.data.modelEffort?.manager ?? {});
-    setDevEfforts(policyQuery.data.modelEffort?.dev ?? {});
-    setReasoningOrder(policyQuery.data.reasoningEffortOrder.join(", "));
-    setWarnings(policyQuery.data.warningThresholds.join(", "));
-    setHandoff(String(policyQuery.data.handoffThreshold));
+    if (policyQuery.data) setDraft(draftFromPolicy(policyQuery.data));
   }, [policyQuery.data]);
-  const order = providerOrder.split(",").map((item) => item.trim()).filter(Boolean);
-  const warningThresholds = warnings.split(",").map((item) => Number(item.trim()));
-  const handoffThreshold = Number(handoff.trim());
-  const modelOrder = { manager: managerModels.split(",").map((item) => item.trim()).filter(Boolean),
-    dev: devModels.split(",").map((item) => item.trim()).filter(Boolean) };
-  const reasoningEffortOrder = reasoningOrder.split(",").map((item) => item.trim()).filter(Boolean);
-  // Only efforts on ranked entries are meaningful; an entry without one uses the provider/role default.
-  const rankedEfforts = (efforts: Record<string, string>, ranked: string[]) =>
-    Object.fromEntries(ranked.filter((item) => efforts[item]).map((item) => [item, efforts[item]!]));
-  const modelEffort = { manager: rankedEfforts(managerEfforts, modelOrder.manager), dev: rankedEfforts(devEfforts, modelOrder.dev) };
-  const savedEffort = { manager: rankedEfforts(policy.modelEffort?.manager ?? {}, policy.modelOrder.manager),
-    dev: rankedEfforts(policy.modelEffort?.dev ?? {}, policy.modelOrder.dev) };
-  const hasEfforts = Object.keys(modelEffort.manager).length > 0 || Object.keys(modelEffort.dev).length > 0;
-  const changed = providerOrder !== policy.providerOrder.join(", ") || managerModels !== policy.modelOrder.manager.join(", ") ||
-    devModels !== policy.modelOrder.dev.join(", ") || reasoningOrder !== policy.reasoningEffortOrder.join(", ") ||
-    warnings !== policy.warningThresholds.join(", ") || handoff !== String(policy.handoffThreshold) ||
-    JSON.stringify(modelOrder.manager.map((item) => modelEffort.manager[item] ?? "")) !== JSON.stringify(policy.modelOrder.manager.map((item) => savedEffort.manager[item] ?? "")) ||
-    JSON.stringify(modelOrder.dev.map((item) => modelEffort.dev[item] ?? "")) !== JSON.stringify(policy.modelOrder.dev.map((item) => savedEffort.dev[item] ?? ""));
+  // Keys saved in the policy for roles that no longer exist are kept, so saving never drops a ranking.
+  const keys = [...new Set([...entries.map((entry) => entry.key), ...Object.keys(policy.modelOrder)])];
+  const payload = { ...policy, ...buildRoutingPolicy(draft, keys) };
+  const unchanged = { ...policy, ...buildRoutingPolicy(draftFromPolicy(policy), keys) };
+  const changed = JSON.stringify(payload) !== JSON.stringify(unchanged);
+  const setList = (key: string, value: string) => setDraft((current) => ({ ...current, lists: { ...current.lists, [key]: value } }));
+  const setEffort = (key: string, value: Record<string, string>) => setDraft((current) => ({ ...current, efforts: { ...current.efforts, [key]: value } }));
   const save = async () => {
     setSaving(true); setError(null);
     try {
-      await writePolicy({ version: 1, providerOrder: order, modelOrder, ...(hasEfforts ? { modelEffort } : {}),
-        reasoningEffortOrder, warningThresholds, handoffThreshold });
+      await writePolicy(payload);
       await policyQuery.refetch();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : String(saveError));
@@ -198,37 +170,44 @@ function RoutingSettings({ theme, hostId }: { theme: Theme; hostId: string }) {
   const effortOptions = catalogReady ? [...new Set([...emptyRoutingPolicy.reasoningEffortOrder,
     ...readyProviders.flatMap((entry) => (entry.models ?? []).flatMap((model) => (model.thinkingOptions ?? []).map((option) => option.id)))])]
     .map((id) => ({ value: id, label: id })) : undefined;
-  return <SettingsSection title="Provider routing and handoff">
+  return <SettingsSection title="Model Routing">
     <SettingsCard>
       <View style={{ padding: 8, gap: 10 }}>
         {policyQuery.isLoading || catalog.isLoading ? <ActivityIndicator color={theme.colors.foregroundMuted} /> : null}
         {policyQuery.isError ? <Text style={{ color: theme.colors.statusDanger }}>Routing policy unavailable: {String(policyQuery.error)}</Text> : null}
         {catalog.isError ? <Text style={{ color: theme.colors.statusDanger }}>Provider catalog unavailable: {String(catalog.error)}</Text> : null}
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>
-          Provider-specific role defaults are configured on the Lane Manager and Lane Dev tabs. Set this order to make those defaults the normal route for new work; an empty provider order preserves the existing global/default launch choice. Provider order chooses the fallback tier, and the role's model order ranks models within a provider. Running agents are never changed here.
+          Each role has one ranked model order and optional per-model reasoning effort. Lane role permission modes and provider options appear under their ranking. Existing saved provider and role defaults remain launch fallbacks when a role order is empty.
         </Text>
         <SortableOrderEditor theme={theme} label="Provider order"
           hint={`Drag providers into priority order. Ready providers: ${[...providerNames.keys()].join(", ") || "none"}.`}
-          value={providerOrder} onChange={setProviderOrder} placeholder="Add provider ID"
-          options={providerOptions} selectLabel="Add provider" />
-        <SortableOrderEditor theme={theme} label="Lane Manager model order"
-          hint="Drag to set model priority and choose each model's reasoning effort. Default effort uses the provider/role default."
-          value={managerModels} onChange={setManagerModels} placeholder="Add provider/model ID"
-          options={modelOptions} selectLabel="Add model"
-          efforts={managerEfforts} onEffortsChange={setManagerEfforts} effortOptions={effortChoices} />
-        <SortableOrderEditor theme={theme} label="Lane Dev model order"
-          hint="Drag to set model priority and choose each model's reasoning effort. Default effort uses the provider/role default."
-          value={devModels} onChange={setDevModels} placeholder="Add provider/model ID"
-          options={modelOptions} selectLabel="Add model"
-          efforts={devEfforts} onEffortsChange={setDevEfforts} effortOptions={effortChoices} />
+          value={draft.providerOrder} onChange={(value) => setDraft((current) => ({ ...current, providerOrder: value }))}
+          placeholder="Add provider ID" options={providerOptions} selectLabel="Add provider" />
+        {entries.map((entry) => {
+          const firstRankedModel = splitList(ownValue(draft.lists, entry.key))[0] ?? "";
+          return <View key={entry.key} style={{ gap: 8, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, padding: 8 }}>
+            <SortableOrderEditor theme={theme} label={`${entry.label} model order`}
+              hint={`Drag to set model priority and choose each model's reasoning effort. Default effort uses the ${entry.role ? "role" : "provider model"} default.`}
+              value={ownValue(draft.lists, entry.key) ?? ""} onChange={(value) => setList(entry.key, value)}
+              placeholder="Add provider/model ID" options={modelOptions} selectLabel="Add model"
+              efforts={ownValue(draft.efforts, entry.key) ?? {}} onEffortsChange={(value) => setEffort(entry.key, value)} effortOptions={effortChoices} />
+            {entry.role ? firstRankedModel
+              ? <RoleLaunchOptions role={entry.role} agent={firstRankedModel}
+                thinkingOptionId={ownValue(ownValue(draft.efforts, entry.key), firstRankedModel) ?? ""}
+                theme={theme} hostId={hostId} />
+              : <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, paddingLeft: 10 }}>
+                Add a ranked model to load this role’s permission and provider options. Existing saved defaults remain available when the order is empty.
+              </Text> : null}
+          </View>;
+        })}
         <SortableOrderEditor theme={theme} label="Reasoning effort order"
           hint="Drag from lower to higher reasoning; each provider/model must support the chosen value."
-          value={reasoningOrder} onChange={setReasoningOrder} placeholder="Add effort ID"
-          options={effortOptions} selectLabel="Add effort" />
+          value={draft.reasoningOrder} onChange={(value) => setDraft((current) => ({ ...current, reasoningOrder: value }))}
+          placeholder="Add effort ID" options={effortOptions} selectLabel="Add effort" />
         <SettingsInput label="Usage warning thresholds (%)" hint="Notify at each threshold when fresh host quota data is checked. Example: 80, 90."
-          initialValue={warnings} onChangeText={setWarnings} placeholder="80, 90" />
+          initialValue={draft.warnings} onChangeText={(value) => setDraft((current) => ({ ...current, warnings: value }))} placeholder="80, 90" />
         <SettingsInput label="Provider handoff threshold (%)" hint="At this usage level, route new work to the next eligible provider in the order."
-          initialValue={handoff} onChangeText={setHandoff} placeholder="95" />
+          initialValue={draft.handoff} onChangeText={(value) => setDraft((current) => ({ ...current, handoff: value }))} placeholder="95" />
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>
           Warnings depend on fresh Paseo host quota reports and are surfaced at work/check boundaries. The plugin does not run an always-on usage monitor or mutate an active provider session; active work needs a checkpointed, quiescent continuation.
         </Text>
@@ -241,7 +220,7 @@ function RoutingSettings({ theme, hostId }: { theme: Theme; hostId: string }) {
 
 export function SettingsScreen({ theme, host }: PluginSurfaceProps) {
   const settings = useSettings(preferences);
-  const [section, setSection] = useState<Section>("manager");
+  const [section, setSection] = useState<Section>("routing");
   return <View style={{ padding: 12, gap: 8 }}>
     <Nav section={section} setSection={setSection} theme={theme} />
     {section === "resources" ? <ResourceSettings key={host.id} theme={theme} hostId={host.id} />
@@ -250,7 +229,6 @@ export function SettingsScreen({ theme, host }: PluginSurfaceProps) {
       : settings.status === "loading" ? <ActivityIndicator color={theme.colors.foregroundMuted} />
         : settings.status === "error" || settings.status === "invalid"
           ? <Text style={{ color: theme.colors.statusDanger }}>Lanes settings unavailable: {settings.error}</Text>
-            : section === "routing" ? <RoutingSettings theme={theme} hostId={host.id} />
-            : <RoleSettings key={section} role={section} theme={theme} hostId={host.id} />}
+            : section === "routing" ? <RoutingSettings theme={theme} hostId={host.id} /> : null}
   </View>;
 }

@@ -5,7 +5,10 @@ description: >-
   session. Own technical decisions, implementation, integration, verification
   and Lanes completion records. Use for requests to plan and implement a feature,
   fix, or other Lanes work in one go, including continuing unfinished work.
-  This is the developer role, not the Lane Manager or a recurring monitor.
+  In Lanes requests, "worker" means execution; use this skill for technical
+  implementation. Choose the UX Engineer role for interface-focused design work
+  when the request or context calls for it. This is the developer role, not the
+  Lane Manager or a recurring monitor.
 metadata:
   author: Daniel Fosco
   version: "2026.10.24.1"

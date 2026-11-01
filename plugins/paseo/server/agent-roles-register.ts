@@ -1,7 +1,7 @@
 import os from "node:os";
 import type { PluginServerContext, PluginHandlerContext } from "@getpaseo/plugin/server";
 import {
-  AgentRoleError, agentRolesSettings, builtInRoleIds, roleCatalogRpc, roleResolveRpc, rolesListRpc,
+  AgentRoleError, agentRolesSettings, builtInRoleIds, responsibilityType, roleCatalogRpc, roleResolveRpc, rolesListRpc,
 } from "../shared/agent-roles";
 import { type AgentRole, type Preferences } from "../shared/contracts";
 import { readProviderCatalog, type ConfigureOverride } from "./agent-roles";
@@ -21,7 +21,7 @@ export function registerAgentRoles(server: PluginServerContext, options: {
   server.handle(rolesListRpc, async () => {
     const state = await reader.read();
     if (state.status !== "ready") throw new AgentRoleError("unavailable", `Agent role settings are invalid: ${state.error}`);
-    return { revision: state.revision, roles: state.values.roles, builtInIds: [...builtInRoleIds] };
+    return { revision: state.revision, roles: state.values.roles.map((role) => ({ ...role, type: responsibilityType(role) })), builtInIds: [...builtInRoleIds] };
   });
   server.handle(roleCatalogRpc, async (input, { paseo }) => readProviderCatalog(paseo, await cwdFor(paseo, input.projectId)));
   server.handle(roleResolveRpc, async (input, { paseo }) => {
@@ -39,7 +39,7 @@ export function registerAgentRoles(server: PluginServerContext, options: {
     } : undefined;
     return roleLaunch(paseo, prefs, {
       root, projectId: input.projectId ?? "", kind, roleId: input.roleId, roles: state.values.roles,
-      workPrompt: input.workPrompt ?? "", agentConfig: override, approveMetered: input.approveMetered,
+      workPrompt: input.workPrompt ?? "", agentConfig: override,
     });
   });
   return () => { setAgentRoleSource(null); };

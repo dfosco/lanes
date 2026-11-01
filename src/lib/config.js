@@ -42,6 +42,7 @@ export const MODEL_PREFERENCE_DEFAULTS = {
 
 export const MODEL_PREFERENCE_KEYS = Object.keys(MODEL_PREFERENCE_DEFAULTS);
 export const MODEL_ROUTING_POLICY_KEY = 'model_routing_policy';
+const ROUTING_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,47}$/;
 export const DEFAULT_MODEL_ROUTING_POLICY = Object.freeze({
   version: 1,
   providerOrder: [],
@@ -80,9 +81,9 @@ function validateRoutingPolicy(value) {
   if (!Array.isArray(order) || order.some((provider) => typeof provider !== 'string' || !/^[a-z0-9][a-z0-9_-]*$/i.test(provider)) ||
     new Set(order).size !== order.length) throw new Error('providerOrder must contain unique Paseo provider IDs');
   if (!modelOrder || typeof modelOrder !== 'object' || Array.isArray(modelOrder) ||
-    !['manager', 'dev'].every((role) => Array.isArray(modelOrder[role]) && modelOrder[role].every((model) =>
-      typeof model === 'string' && /^[a-z0-9][a-z0-9_-]*\/.+$/i.test(model)) && new Set(modelOrder[role]).size === modelOrder[role].length)) {
-    throw new Error('modelOrder must provide unique provider/model IDs for manager and dev');
+    Object.entries(modelOrder).some(([role, models]) => !ROUTING_KEY_PATTERN.test(role) || !Array.isArray(models) ||
+      models.some((model) => typeof model !== 'string' || !/^[a-z0-9][a-z0-9_-]*\/.+$/i.test(model)) || new Set(models).size !== models.length)) {
+    throw new Error('modelOrder must map role keys to unique provider/model IDs');
   }
   if (!Array.isArray(effortOrder) || effortOrder.length === 0 || effortOrder.some((effort) => typeof effort !== 'string' || !effort.trim()) ||
     new Set(effortOrder).size !== effortOrder.length) throw new Error('reasoningEffortOrder must contain unique reasoning IDs in preference order');
@@ -93,27 +94,29 @@ function validateRoutingPolicy(value) {
   if (!Number.isInteger(handoff) || handoff < 1 || handoff > 100 || warnings.some((threshold) => threshold >= handoff)) {
     throw new Error('handoffThreshold must be 1–100 and above each warning threshold');
   }
+  const normalizedOrder = { manager: [], dev: [] };
+  for (const [role, models] of Object.entries(modelOrder)) normalizedOrder[role] = [...models];
   const policy = { ...DEFAULT_MODEL_ROUTING_POLICY, ...value, providerOrder: [...order],
-    modelOrder: { manager: [...modelOrder.manager], dev: [...modelOrder.dev] },
+    modelOrder: normalizedOrder,
     reasoningEffortOrder: [...effortOrder], warningThresholds: [...warnings] };
   if (Object.hasOwn(value, 'modelEffort')) policy.modelEffort = validateModelEffort(value.modelEffort, policy.modelOrder);
   return policy;
 }
 
 /**
- * Optional per-entry reasoning effort: `{ manager: { 'provider/model': 'effort' }, dev: { ... } }`.
+ * Optional per-entry reasoning effort: `{ <routing key>: { 'provider/model': 'effort' } }`.
  * Keys must be ranked in the same role's modelOrder; an entry without a value uses the provider/role default.
  */
 function validateModelEffort(value, modelOrder) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some((role) => !['manager', 'dev'].includes(role))) {
-    throw new Error('modelEffort must be an object with optional manager and dev maps');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('modelEffort must map role keys to provider/model reasoning maps');
   }
   const normalized = {};
-  for (const role of ['manager', 'dev']) {
-    const efforts = value[role] ?? {};
+  for (const [role, efforts] of Object.entries(value)) {
+    if (!ROUTING_KEY_PATTERN.test(role)) throw new Error(`modelEffort has an invalid role key ${role}`);
     if (!efforts || typeof efforts !== 'object' || Array.isArray(efforts)) throw new Error(`modelEffort.${role} must map provider/model IDs to reasoning IDs`);
     for (const [model, effort] of Object.entries(efforts)) {
-      if (!modelOrder[role].includes(model)) throw new Error(`modelEffort.${role} has ${model}, which is not in the ${role} modelOrder`);
+      if (!(modelOrder[role] ?? []).includes(model)) throw new Error(`modelEffort.${role} has ${model}, which is not in the ${role} modelOrder`);
       if (typeof effort !== 'string' || !effort.trim() || effort !== effort.trim()) throw new Error(`modelEffort.${role} needs a nonempty reasoning ID for ${model}`);
     }
     normalized[role] = { ...efforts };

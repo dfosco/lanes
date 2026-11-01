@@ -202,12 +202,13 @@ describe("lane environment lifecycle", () => {
     settingsOverrides: Partial<LaneEnvironmentSettings> = {},
     storeFile = path.join(dir, "state.json"),
     runPaseoCli: (args: readonly string[]) => Promise<string> = async () => { throw new Error("test Paseo CLI unavailable"); },
+    guidance?: string,
   ) {
     const current = laneEnvironmentSettings.parse({ ...settingsOverrides });
     return createLaneEnvironment({
       store: createLaneEnvironmentStore(storeFile),
       settings: async () => current,
-      managerSystemPrompt: async ({ systemPrompt }) => systemPrompt,
+      managerSystemPrompt: async ({ systemPrompt }) => systemPrompt ?? guidance,
       runPaseoCli,
       now: () => now,
       randomId: () => `req-${++counter}`,
@@ -332,6 +333,28 @@ describe("lane environment lifecycle", () => {
     expect(fake.agents.get("a1")?.title).toBe("[former Lane Manager] Ship it");
     expect(result.workspace).toMatchObject({ managerId: "a2" });
     expect(result.workspace.demoted.map((entry) => entry.agentId)).toEqual(["a1"]);
+  });
+
+  it("sends the Lane Manager guidance to the promoted running session", async () => {
+    const fake = fakePaseo({ agents: [
+      { id: "candidate", workspaceId: "ws1", cwd: "/repo/one", title: "Work on login", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const env = service({}, path.join(dir, "state.json"), titleCli(fake.agents).run, "ROLE GUIDANCE");
+    const result = await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "candidate" });
+    expect(result).toMatchObject({ assignmentApplied: true, guidanceDelivered: true, guidanceError: null });
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0]).toMatchObject({ agentId: "candidate", text: "/lane-manager Proceed as the lane manager" });
+  });
+
+  it("keeps the assignment and reports it when the guidance cannot be delivered", async () => {
+    const fake = fakePaseo({ sendFails: true, agents: [
+      { id: "candidate", workspaceId: "ws1", cwd: "/repo/one", title: "Work on login", archivedAt: null, status: "idle", activeTurn: null, pendingPermissions: [], runtimeInfo: null },
+    ] });
+    const env = service({}, path.join(dir, "state.json"), titleCli(fake.agents).run, "ROLE GUIDANCE");
+    const result = await env.assignManager(fake.paseo, { workspaceId: "ws1", agentId: "candidate" });
+    expect(result).toMatchObject({ assignmentApplied: true, guidanceDelivered: false });
+    expect(result.guidanceError).toContain("Lane Manager guidance was not delivered");
+    expect(result.workspace.managerId).toBe("candidate");
   });
 
   it("applies the manager title when assigning into a workspace with no previous manager", async () => {

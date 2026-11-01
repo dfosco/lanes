@@ -35,10 +35,11 @@ describe('Lane Manager progress communication contract', () => {
     expect(body).not.toMatch(/paseo plugin|AGENTS\.md required/i);
   });
 
-  it('labels plugin role material as unshipped', () => {
-    expect(text(paseo)).toContain('is still being implemented');
-    expect(text(paseo)).toContain('do not treat ordered candidate resolution');
-    expect(text(paseo)).toContain('Role guidance is not yet delivered');
+  it('documents the shipped plugin role routing contract', () => {
+    expect(text(paseo)).toContain('A role contains optional instructions and skill references.');
+    expect(text(paseo)).toContain('Ranked automatic routes use the shared provider handoff threshold');
+    expect(text(paseo)).toContain('A manual provider/model selection is an explicit override');
+    expect(text(paseo)).toContain('the plugin sends `/lane-manager Proceed as the lane manager`');
     expect(text(paseo)).toContain('Native Paseo profiles are not a required input');
   });
 });

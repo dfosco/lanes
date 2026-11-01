@@ -1,45 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
-  AgentRoleError, agentRoleDefinition, applyRoleChange, builtInRoleIds, builtInRoles, candidateKey,
-  composeRoleSystemPrompt, hasRoleMarker, roleMarker, saveRoleChange, agentRolesSettings,
+  AgentRoleError, agentRoleDefinition, applyRoleChange, builtInRoleIds, builtInRoles,
+  composeRoleSystemPrompt, hasRoleMarker, roleMarker, saveRoleChange, agentRolesSettings, responsibilityType,
   type AgentRolesValues, type RolesStore, type RolesStoreState, type RolesStoreWrite,
 } from "./agent-roles";
 
 const base = (): AgentRolesValues => ({ roles: builtInRoles() });
 const custom = {
   id: "reviewer", name: "Reviewer", description: "", instructions: "Review carefully.",
-  skills: ["lane-dev"], candidates: [{ agent: "claude/claude-sonnet-5-5", thinkingOptionId: "high" }],
+  skills: ["lane-dev"],
 };
 
 describe("role schema", () => {
   it("accepts optional instructions and skills and deduplicates skill references", () => {
-    const parsed = agentRoleDefinition.parse({ id: "x", name: "X", candidates: [], skills: ["a", "a", "b"] });
+    const parsed = agentRoleDefinition.parse({ id: "x", name: "X", skills: ["a", "a", "b"] });
     expect(parsed.instructions).toBe("");
     expect(parsed.skills).toEqual(["a", "b"]);
     expect(parsed.revision).toBe(1);
-    expect(parsed.quota).toEqual({ maxUsagePct: 95, maxAgeMinutes: 30, whenUnknown: "allow" });
   });
 
-  it("rejects invalid IDs, control-character names and unqualified candidates", () => {
+  it("rejects invalid IDs and control-character names", () => {
     expect(() => agentRoleDefinition.parse({ id: "Bad_ID", name: "x" })).toThrow();
     expect(() => agentRoleDefinition.parse({ id: "ok", name: "bad\u0007name" })).toThrow();
-    expect(() => agentRoleDefinition.parse({ id: "ok", name: "x", candidates: [{ agent: "claude" }] })).toThrow();
-    expect(() => agentRoleDefinition.parse({ id: "ok", name: "x", candidates: [{ agent: "claude/m", extra: 1 }] })).toThrow();
-  });
-
-  it("rejects duplicate candidates and a quota threshold above 95", () => {
-    const duplicate = { id: "ok", name: "x", candidates: [
-      { agent: "claude/claude-sonnet-5-5", thinkingOptionId: "high" },
-      { agent: "claude/claude-sonnet-5-5", thinkingOptionId: "high" },
-    ] };
-    expect(() => agentRoleDefinition.parse(duplicate)).toThrow(/Duplicate launch candidate/);
-    expect(() => agentRoleDefinition.parse({ id: "ok", name: "x", quota: { maxUsagePct: 96 } })).toThrow();
-  });
-
-  it("keeps candidate identity stable regardless of feature ordering", () => {
-    const a = candidateKey({ agent: "claude/m", featureValues: { b: true, a: "x" } });
-    const b = candidateKey({ agent: "claude/m", featureValues: { a: "x", b: true } });
-    expect(a).toBe(b);
+    expect(() => agentRoleDefinition.parse({ id: "manager", name: "Reserved" })).toThrow(/reserved/);
+    expect(() => agentRoleDefinition.parse({ id: "dev", name: "Reserved" })).toThrow(/reserved/);
   });
 
   it("settings default to the built-in roles and tolerate unrelated keys", () => {
@@ -47,18 +31,46 @@ describe("role schema", () => {
     expect(parsed.roles.map((role) => role.id)).toEqual(builtInRoleIds);
     expect(parsed).toMatchObject({ other: 1 });
   });
+
+  it("reads legacy role settings with guidance intact and strips retired launch-policy fields in memory", () => {
+    const parsed = agentRolesSettings.schema.parse({ roles: [{
+      id: "legacy-role", name: "Legacy role", description: "Keep this", revision: 3,
+      instructions: "Preserve this guidance.", skills: ["lane-dev"],
+      candidates: [{ agent: "claude/old-model", metered: true }],
+      quota: { maxUsagePct: 92, maxAgeMinutes: 30, whenUnknown: "allow" },
+    }] });
+    expect(parsed.roles[0]).toMatchObject({ id: "legacy-role", description: "Keep this", revision: 3,
+      instructions: "Preserve this guidance.", skills: ["lane-dev"] });
+    expect(parsed.roles[0]).not.toHaveProperty("candidates");
+    expect(parsed.roles[0]).not.toHaveProperty("quota");
+  });
+
+  it("infers planner/worker responsibility for legacy role data without rewriting it", () => {
+    const legacyManager = { id: "lane-manager", name: "Old Manager" };
+    const legacyCustom = { id: "constructor", name: "Constructor" };
+    expect(agentRoleDefinition.parse(legacyManager).type).toBeUndefined();
+    expect(responsibilityType(legacyManager)).toBe("planner");
+    expect(responsibilityType(legacyCustom)).toBe("worker");
+    expect(agentRoleDefinition.parse({ ...legacyCustom, type: "planner" }).type).toBe("planner");
+    expect(() => agentRoleDefinition.parse({ ...legacyCustom, type: "coordinator" })).toThrow();
+  });
 });
 
 describe("built-in roles", () => {
-  it("ship the required roles with discovered-style candidate IDs and instruction-free presets", () => {
+  it("ship the required roles with instruction-free presets", () => {
     expect(builtInRoleIds).toEqual(["lane-manager", "lane-dev", "design-engineer", "deep-reasoning", "fast-implementation"]);
     const byId = Object.fromEntries(builtInRoles().map((role) => [role.id, role]));
-    expect(byId["design-engineer"].candidates[0]).toMatchObject({ agent: "claude/claude-sonnet-5-5", thinkingOptionId: "high" });
+    expect(byId["lane-manager"].type).toBe("planner");
+    expect(byId["lane-dev"].type).toBe("worker");
+    expect(byId["design-engineer"].name).toBe("UX Engineer");
+    expect(byId["design-engineer"].id).toBe("design-engineer");
+    expect(byId["design-engineer"].type).toBe("worker");
+    expect(byId["design-engineer"].instructions).toContain("design engineer");
     expect(byId["deep-reasoning"].instructions).toBe("");
     expect(byId["deep-reasoning"].skills).toEqual([]);
     expect(byId["fast-implementation"].instructions).toBe("");
     expect(byId["lane-manager"].skills).toEqual(["lane-manager"]);
-    expect(byId["lane-dev"].candidates).toEqual([]);
+    expect(byId["lane-dev"].skills).toEqual(["lane-dev"]);
   });
 });
 
@@ -173,7 +185,7 @@ describe("system prompt composition", () => {
   });
 
   it("returns the caller value unchanged for instruction-free presets and no value when none is given", () => {
-    const preset = agentRoleDefinition.parse({ id: "fast", name: "Fast", candidates: [{ agent: "claude/claude-haiku-5-5" }] });
+    const preset = agentRoleDefinition.parse({ id: "fast", name: "Fast" });
     expect(composeRoleSystemPrompt(preset, [])).toBeUndefined();
     expect(composeRoleSystemPrompt(preset, [], "Caller")).toBe("Caller");
   });

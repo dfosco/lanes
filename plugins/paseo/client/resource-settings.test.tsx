@@ -43,6 +43,17 @@ vi.mock("react-native", async () => {
     ActivityIndicator: () => h("span", {}, "Loading"),
   };
 });
+vi.mock("@getpaseo/plugin/client/react-native", async () => {
+  const { createElement: h } = await import("react");
+  return {
+    TextInput: ({ accessibilityLabel, placeholder, value, onChangeText }: any) => h("input", {
+      "aria-label": accessibilityLabel, placeholder, value, onInput: (event: any) => onChangeText(event.currentTarget.value),
+    }),
+    ScrollView: ({ children }: any) => h("div", {}, children),
+    Modal: Object.assign(({ title, open, children }: any) => open ? h("div", { role: "dialog", "aria-label": title }, children) : null,
+      { Content: ({ children }: any) => h("div", {}, children) }),
+  };
+});
 vi.mock("./agent-configuration", () => ({ AgentConfigFields: () => null }));
 
 const theme = { colors: { foreground: "#fff", foregroundMuted: "#aaa", border: "#444", accent: "#58f",
@@ -120,7 +131,7 @@ describe("Resource settings", () => {
     expect(cache.getQueryData(["clips.resource-manager.status", "host-1"])).toEqual(defaultStatus);
     await render("host-2", true);
     expect(cache.getQueryData(["clips.resource-manager.status", "host-2"])).toEqual(defaultStatus);
-    await click("Lane Manager");
+    await click("Model Routing");
     expect(cache.getQueryCache().find({ queryKey: ["clips.resource-manager.status", "host-2"] })?.getObserversCount() ?? 0).toBe(0);
   });
 

@@ -100,9 +100,10 @@ export const saveRoleModelDefaultsRpc = defineRpc({
 export const modelRoutingPolicy = z.object({
   version: z.literal(1),
   providerOrder: z.array(z.string()),
-  modelOrder: z.object({ manager: z.array(z.string()), dev: z.array(z.string()) }).strict(),
+  /** Ranked provider/model IDs per routing key: `manager` and `dev` for Lane roles, otherwise the role ID. */
+  modelOrder: z.record(z.string(), z.array(z.string())),
   /** Optional reasoning effort per ranked `provider/model` entry; an entry without one uses the role default. */
-  modelEffort: z.object({ manager: z.record(z.string(), z.string()), dev: z.record(z.string(), z.string()) }).strict().optional(),
+  modelEffort: z.record(z.string(), z.record(z.string(), z.string())).optional(),
   reasoningEffortOrder: z.array(z.string()),
   warningThresholds: z.array(z.number().int().min(1).max(99)),
   handoffThreshold: z.number().int().min(1).max(100),
@@ -350,9 +351,8 @@ export const startRpc = defineRpc({
     workspaceId: z.string().optional(),
     agentConfig: agentConfiguration.optional(),
     hostId: z.string().optional(),
-    /** Plugin-owned role (shared/agent-roles.ts). Manual agentConfig still wins over its candidates. */
+    /** Plugin-owned role (shared/agent-roles.ts). Manual agentConfig still wins over its Routing order. */
     roleId: z.string().optional(),
-    approveMetered: z.boolean().optional(),
   }),
   output: z.object({
     workspaceId: z.string(),

@@ -21,6 +21,14 @@ afterward. Add detail when it helps another agent act or accept the result.
 
 ## Choose the role and delivery mode
 
+In Lanes requests, **planner** means Lane Manager, the built-in coordination
+role. **Worker** means execution: choose Lane Dev for technical implementation
+or UX Engineer for interface-focused design work when the request or context
+calls for it. This is role vocabulary, not delivery-mode selection or added
+authority. In particular, "act as planner" does not mean plan-only; explicit
+plan-only, defer, implementation authorization, bounded scope, and external
+approval requirements retain precedence.
+
 Use [Lane Manager](../lane-manager/SKILL.md#choose-the-delivery-mode-once-per-scope)
 for delivery coordination. On new scope without explicit user direction, the
 manager must ask whether to run planning + breakdown + implementation (default)

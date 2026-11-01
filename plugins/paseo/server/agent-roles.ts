@@ -1,10 +1,9 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import {
-  AgentRoleError, MAX_QUOTA_PCT, composeRoleSystemPrompt, roleMarker,
-  type AgentRoleDefinition, type ResolvedSkillContent, type RoleAttempt, type RoleResolution, type RoleUsageEvidence,
+  AgentRoleError, composeRoleSystemPrompt, responsibilityType, roleMarker,
+  type AgentRoleDefinition, type ResolvedSkillContent, type RoleAttempt, type RoleResolution,
 } from "../shared/agent-roles";
 import { defaultSkillRoots, resolveSkills, type SkillRoot } from "./agent-skills";
-import { resolvePermissionMode, type ProviderPermissionMode } from "../shared/permission-modes";
 
 type Paseo = PluginHandlerContext["paseo"];
 
@@ -16,65 +15,46 @@ export type LaunchConfiguration = {
   featureValues?: Record<string, boolean | string>;
   systemPrompt?: string;
 };
-/** A launch override: a candidate, or explicit manual options. Validated by the existing backend resolver. */
+/** A launch override: a routed model, or explicit manual options. Validated by the existing backend resolver. */
 export type ConfigureOverride = {
   provider: string;
   thinkingOptionId?: string;
   featureValues: Record<string, boolean | string>;
   modeId?: string;
 };
+/** One ranked `provider/model` from the Routing policy, in launch order. */
+export type RoleRoute = { agent: string; effort?: string };
 
 export class AgentRoleResolutionError extends Error {
   constructor(readonly roleId: string, readonly attempts: RoleAttempt[]) {
-    super(`No eligible launch candidate for role ${roleId}: ${attempts.map((a) => `[${a.index}] ${a.agent} — ${a.code}: ${a.message}`).join("; ")}`);
+    super(`No eligible launch route for role ${roleId}: ${attempts.map((a) => `[${a.index}] ${a.agent} — ${a.code}: ${a.message}`).join("; ")}`);
     this.name = "AgentRoleResolutionError";
   }
 }
 
 const text = (error: unknown) => error instanceof Error ? error.message : String(error);
+const MAX_USAGE_AGE_MS = 30 * 60_000;
 
-export type UsageReportLike = {
-  providerId?: string;
-  status?: string;
-  fetchedAt?: string | null;
-  windows?: readonly { id: string; label?: string; usedPct?: number | null; remainingPct?: number | null }[];
-};
-
-/**
- * Evidence for one provider from the host usage report. The maximum used percentage across numeric windows
- * is the signal. Missing, stale, failed or non-numeric readings stay unknown; they are never treated as zero.
- */
-export function usageEvidence(
-  provider: string,
-  report: UsageReportLike | null | undefined,
-  options: { maxAgeMinutes: number; now: number; fallbackFetchedAt?: string | null; failure?: string },
-): RoleUsageEvidence {
-  const unknown = (reason: string, fetchedAt: string | null = null, ageMinutes: number | null = null): RoleUsageEvidence =>
-    ({ provider, state: "unknown", maxUsedPct: null, window: null, fetchedAt, ageMinutes, reason });
-  if (options.failure) return unknown(`usage unavailable: ${options.failure}`);
-  if (!report) return unknown("no usage report for this provider");
-  const fetchedAt = report.fetchedAt ?? options.fallbackFetchedAt ?? null;
-  const fetched = fetchedAt ? Date.parse(fetchedAt) : NaN;
-  const ageMinutes = Number.isFinite(fetched) ? Math.max(0, (options.now - fetched) / 60_000) : null;
-  if (report.status !== "available") return unknown(`usage report is ${report.status ?? "unavailable"}`, fetchedAt, ageMinutes);
-  if (ageMinutes === null) return unknown("usage report has no fetch time", fetchedAt);
-  if (ageMinutes > options.maxAgeMinutes) {
-    return unknown(`usage reading is stale (${Math.round(ageMinutes)} min old, limit ${options.maxAgeMinutes})`, fetchedAt, ageMinutes);
+/** Return an evidence-based provider usage value. Missing, malformed, and stale data are unknown. */
+export async function readProviderUsage(paseo: Paseo, providerId: string): Promise<{ usedPct: number } | { reason: string }> {
+  const usageApi = (paseo.providers as unknown as { listUsage?: () => Promise<unknown> }).listUsage;
+  if (!usageApi) return { reason: "This Paseo host does not expose provider usage." };
+  let report: any;
+  try { report = await usageApi.call(paseo.providers); }
+  catch (error) { return { reason: `Paseo usage report failed: ${text(error)}` }; }
+  const provider = report?.providers?.find((item: any) => item.providerId === providerId);
+  if (!provider || provider.status !== "available") return { reason: `Paseo has no available usage report for ${providerId}.` };
+  const fetchedAt = Date.parse(provider.fetchedAt ?? report.fetchedAt ?? "");
+  const age = Date.now() - fetchedAt;
+  if (!Number.isFinite(fetchedAt) || age < -60_000 || age > MAX_USAGE_AGE_MS) {
+    return { reason: `Paseo usage report for ${providerId} is missing or stale.` };
   }
-  let max: number | null = null;
-  let window: string | null = null;
-  for (const entry of report.windows ?? []) {
-    const used = typeof entry.usedPct === "number" ? entry.usedPct
-      : typeof entry.remainingPct === "number" ? 100 - entry.remainingPct : null;
-    if (used !== null && Number.isFinite(used) && (max === null || used > max)) { max = used; window = entry.label || entry.id; }
+  const values = Array.isArray(provider.windows) ? provider.windows.map((window: any) => window.usedPct) : [];
+  if (!values.length || values.some((value: unknown) => typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100)) {
+    return { reason: `Paseo usage report for ${providerId} has no valid quota windows.` };
   }
-  if (max === null) return unknown("usage report has no numeric windows", fetchedAt, ageMinutes);
-  return { provider, state: "known", maxUsedPct: max, window, fetchedAt, ageMinutes, reason: null };
+  return { usedPct: Math.max(...values) };
 }
-
-/** Coarse permission rank: planning/safe < moderate < dangerous. Unknown modes rank as moderate. */
-const tierRank = (mode: ProviderPermissionMode | undefined): number =>
-  !mode ? 1 : mode.colorTier === "dangerous" ? 2 : mode.colorTier === "moderate" ? 1 : mode.colorTier === "safe" || mode.colorTier === "planning" ? 0 : 1;
 
 export type ResolveDeps = {
   paseo: Paseo;
@@ -82,21 +62,22 @@ export type ResolveDeps = {
   roleId: string;
   /** Working directory for live provider discovery. */
   cwd: string;
-  /** The permission mode the launch would use without a candidate. Candidates may not exceed it. */
-  baselineModeId: string;
+  /** Ranked routes for this role from the Routing policy. Empty means the existing role defaults apply. */
+  routes: readonly RoleRoute[];
+  /** Shared Routing policy handoff threshold; automatic routes fail closed without fresh host usage. */
+  handoffThreshold: number;
+  /** Shared warning thresholds; crossed values are included in the selected route's launch diagnostics. */
+  warningThresholds?: readonly number[];
   /** The existing launch validator (backend agentConfiguration). One engine; no copy of its rules here. */
-  configure: (override?: ConfigureOverride) => Promise<LaunchConfiguration>;
+  configure: (override?: ConfigureOverride, options?: { automaticRoute?: boolean }) => Promise<LaunchConfiguration>;
   /** The unchanged work prompt. It is never altered by role guidance. */
   workPrompt?: string;
   /** Skill roots to search, in precedence order. Defaults to this workspace and the user's ~/.agents/skills. */
   skillRoots?: readonly SkillRoot[];
   /** Caller-supplied creation systemPrompt, preserved and composed with (never replaced by) role guidance. */
   systemPrompt?: string;
-  /** Explicit user-selected options. They always win over candidates; the role still contributes guidance. */
+  /** Explicit user-selected options. They always win over routing; the role still contributes guidance. */
   agentConfig?: ConfigureOverride;
-  /** Per-launch approval for metered candidates. Never persisted. */
-  approveMetered?: boolean;
-  now?: () => number;
 };
 
 export async function resolveRoleLaunch(deps: ResolveDeps): Promise<RoleResolution> {
@@ -115,91 +96,59 @@ export async function resolveRoleLaunch(deps: ResolveDeps): Promise<RoleResoluti
   const finish = (
     source: RoleResolution["source"], config: LaunchConfiguration, selectedIndex: number | null, attempts: RoleAttempt[],
   ): RoleResolution => ({
-    role: { id: role.id, name: role.name, revision: role.revision },
-    source, selectedIndex, config: withPrompt(config), prompt, composition, attempts, quota: role.quota,
+    role: { id: role.id, name: role.name, type: responsibilityType(role), revision: role.revision },
+    source, selectedIndex, config: withPrompt(config), prompt, composition, attempts,
   });
 
   if (deps.agentConfig) return finish("manual", await deps.configure(deps.agentConfig), null, []);
-  if (!role.candidates.length) return finish("defaults", await deps.configure(), null, []);
+  if (!deps.routes.length) return finish("defaults", await deps.configure(), null, []);
 
-  const now = (deps.now ?? Date.now)();
   const snapshot = (await deps.paseo.providers.snapshot({ cwd: deps.cwd })).entries;
-  const reports = new Map<string, UsageReportLike>();
-  let fallbackFetchedAt: string | null = null;
-  let usageFailure: string | undefined;
-  try {
-    const result = await deps.paseo.providers.listUsage();
-    fallbackFetchedAt = result.fetchedAt ?? null;
-    for (const report of result.providers) reports.set(report.providerId, report);
-  } catch (error) {
-    usageFailure = text(error);
-  }
-
   const attempts: RoleAttempt[] = [];
-  for (const [index, candidate] of role.candidates.entries()) {
-    const skip = (code: RoleAttempt["code"], message: string, usage: RoleUsageEvidence | null = null) => {
-      attempts.push({ index, agent: candidate.agent, code, message, usage });
+  const usage = new Map<string, Awaited<ReturnType<typeof readProviderUsage>>>();
+  for (const [index, route] of deps.routes.entries()) {
+    const skip = (code: RoleAttempt["code"], message: string) => {
+      attempts.push({ index, agent: route.agent, code, message });
     };
-    const slash = candidate.agent.indexOf("/");
-    const providerId = candidate.agent.slice(0, slash);
-    const modelId = candidate.agent.slice(slash + 1);
+    const slash = route.agent.indexOf("/");
+    const providerId = route.agent.slice(0, slash);
+    const modelId = route.agent.slice(slash + 1);
     const entry = snapshot.find((item) => item.provider === providerId);
     if (!entry || entry.status !== "ready" || entry.enabled === false) {
       skip("provider_unavailable", `Provider ${providerId} is not ready on this host.`); continue;
     }
+    let providerQuota = usage.get(providerId);
+    if (!providerQuota) {
+      providerQuota = await readProviderUsage(deps.paseo, providerId);
+      usage.set(providerId, providerQuota);
+    }
+    if ("reason" in providerQuota) { skip("quota_unknown", providerQuota.reason); continue; }
+    if (providerQuota.usedPct >= deps.handoffThreshold) {
+      skip("quota_handoff", `${providerId} usage is ${providerQuota.usedPct}%, at or above the ${deps.handoffThreshold}% handoff threshold.`);
+      continue;
+    }
     const model = entry.models?.find((item) => item.id === modelId && item.isSelectable !== false);
     if (!model) { skip("model_unavailable", `Model ${modelId} is not in the live ${providerId} catalog.`); continue; }
-    if (candidate.metered && !deps.approveMetered) {
-      skip("metered_not_approved", "Metered route needs approval for this launch."); continue;
-    }
+    // A saved effort the model no longer offers is ignored, so the model still launches at its default effort.
+    const effort = route.effort && model.thinkingOptions?.some((option) => option.id === route.effort) ? route.effort : undefined;
     let config: LaunchConfiguration;
     try {
       config = await deps.configure({
-        provider: candidate.agent,
-        ...(candidate.thinkingOptionId ? { thinkingOptionId: candidate.thinkingOptionId } : {}),
-        ...(candidate.modeId ? { modeId: candidate.modeId } : {}),
-        featureValues: candidate.featureValues ?? {},
-      });
+        provider: route.agent,
+        ...(effort ? { thinkingOptionId: effort } : {}),
+        featureValues: {},
+      }, { automaticRoute: true });
     } catch (error) {
       skip("configuration_invalid", text(error)); continue;
     }
-    if (candidate.modeId && escalates(await candidateModes(deps, providerId), candidate.modeId, deps.baselineModeId)) {
-      skip("permission_escalation", `Mode ${candidate.modeId} is more permissive than the launch baseline ${deps.baselineModeId}.`); continue;
-    }
-    const usage = usageEvidence(providerId, reports.get(providerId), {
-      maxAgeMinutes: role.quota.maxAgeMinutes, now, fallbackFetchedAt, failure: usageFailure,
-    });
-    if (usage.state === "known" && usage.maxUsedPct! >= Math.min(role.quota.maxUsagePct, MAX_QUOTA_PCT)) {
-      skip("quota_exhausted", `${usage.window} is at ${usage.maxUsedPct}% (limit ${role.quota.maxUsagePct}%).`, usage); continue;
-    }
-    if (usage.state === "unknown" && role.quota.whenUnknown === "skip") {
-      skip("quota_unknown_skipped", `Quota unknown (${usage.reason}); this role skips unknown quota.`, usage); continue;
-    }
-    attempts.push({
-      index, agent: candidate.agent, code: "selected", usage,
-      message: usage.state === "known"
-        ? `${usage.window} at ${usage.maxUsedPct}%.`
-        : `Quota unknown (${usage.reason}); allowed by role policy.`,
-    });
-    return finish("candidate", config, index, attempts);
+    const warnings = (deps.warningThresholds ?? []).filter((threshold) => providerQuota.usedPct >= threshold);
+    const warning = warnings.length
+      ? ` Usage is ${providerQuota.usedPct}%, crossing warning threshold${warnings.length === 1 ? "" : "s"} ${warnings.map((threshold) => `${threshold}%`).join(", ")}.`
+      : "";
+    attempts.push({ index, agent: route.agent, code: "selected", message: `First eligible entry in the Routing order.${warning}` });
+    return finish("routing", config, index, attempts);
   }
   throw new AgentRoleResolutionError(role.id, attempts);
-}
-
-async function candidateModes(deps: ResolveDeps, providerId: string): Promise<readonly ProviderPermissionMode[]> {
-  try {
-    const result = await deps.paseo.providers.listModes(providerId, { cwd: deps.cwd });
-    return (result.modes ?? []) as readonly ProviderPermissionMode[];
-  } catch {
-    return [];
-  }
-}
-
-/** True only when both the candidate and the baseline resolve and the candidate is strictly more permissive. */
-export function escalates(modes: readonly ProviderPermissionMode[], requested: string, baseline: string): boolean {
-  const wanted = resolvePermissionMode(requested, modes, null);
-  const floor = resolvePermissionMode(baseline, modes, null);
-  return Boolean(wanted && floor && tierRank(wanted) > tierRank(floor));
 }
 
 /** Live catalog for role editors: ready providers, their modes and selectable fully qualified models. */

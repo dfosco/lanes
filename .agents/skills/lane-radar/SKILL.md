@@ -28,6 +28,8 @@ planning-validation mode unless the user already chose.
 [Lanes](../lanes/SKILL.md) owns canonical records and acceptance mechanics;
 consult its model without adopting its execution procedures for an intake item.
 The user retains commitment and required external-action approval.
+In Lanes requests, "planner" refers to Lane Manager and "worker" to an execution
+role; Radar can recommend that routing but does not launch or authorize it.
 
 A review request goes to its reviewer, not automatically into a new Goal/Task.
 A bug or product request may warrant a manager handoff. Waiting on an author,

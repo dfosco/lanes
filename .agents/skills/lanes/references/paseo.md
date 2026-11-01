@@ -167,10 +167,13 @@ assignment. An explicit provider-continuation request may require replacing its
 managed running devs as described above. Fold the owner promptly when its
 assignment ends; new work after completion needs a fresh authorized owner.
 Materialize the requested provider/model, permission mode, thinking and feature
-values from live discovery. An optional plugin-owned role can supply ordered
-candidates (see [plugin-owned roles](#plugin-owned-roles-and-the-workspace-environment));
-without one, or when no candidate is eligible, report the fallback rather than
-guessing values. Native Paseo profiles are not a required input.
+values from live discovery. An optional plugin-owned role supplies instructions
+and skill references; its model order and per-model effort come from the shared
+Routing policy (see [plugin-owned roles](#plugin-owned-roles-and-the-workspace-environment)).
+Automatic ranked routes require fresh host usage below the configured handoff
+threshold. Unknown or stale usage blocks that route. An explicit manual launch
+remains a user-selected override and is checked by the shared launch validator.
+Native Paseo profiles are not a required input.
 Workspace choice follows the request/settings, not a universal isolation default.
 
 For a new manager, read `lane_manager_model` and
@@ -333,21 +336,33 @@ closure. Do not invent commands or claim an unavailable live service.
 
 ## Plugin-owned roles and the workspace environment
 
-The optional Lanes Paseo plugin keeps its own role definitions in host-scoped
-plugin settings. A role is not a native Paseo profile, and this procedure never
-reads native profiles. A role has three parts: optional instructions, optional
-skill references, and an ordered list of launch candidates (exact `provider/model`
-IDs with thinking, mode and feature values). Presets such as `deep-reasoning`
-and `fast-implementation` have candidates only.
+The Lanes Paseo plugin keeps role definitions in host-scoped plugin settings.
+A role is not a native Paseo profile, and this procedure never reads native
+profiles. A role contains optional instructions and skill references. Its model
+order and per-model effort are stored in the shared Routing policy: `manager`
+and `dev` remain the Lane role keys, while each other role uses its ID. A role
+with no model order keeps its existing role default. Custom-role effort is
+specific to that role and model; when it is absent or no longer offered, the
+provider model default applies. Older saved candidate and quota fields are
+ignored while reading roles; opening or reading settings does not migrate user
+configuration.
 
-Status: the role registry (validated CRUD, the candidate resolver and prompt
-composition) is still being implemented. Until it lands, do not treat ordered
-candidate resolution, role-guided launches or skill loading as delivered. The
-manual launch path is unchanged, and it remains the only verified launch route.
+Role type describes responsibility, not permission or a model family. The
+built-in planner is `lane-manager`. Built-in workers are `lane-dev` and
+`design-engineer` (displayed as UX Engineer); the `deep-reasoning` and
+`fast-implementation` presets are workers too. UX Engineer retains the
+`design-engineer` ID so saved routes and user identity remain stable. Custom
+roles may choose a supported type. For legacy roles without a type, infer
+planner only for `lane-manager`; infer worker for every other role.
 
-Role guidance is not yet delivered to any session. Do not describe a launched
-session as carrying role instructions. Manual launch options always win over role
-candidates when the registry lands.
+Ranked automatic routes use the shared provider handoff threshold and fresh
+Paseo usage reports. Exhausted providers are skipped in order. Missing, stale,
+future-dated or invalid usage is unknown and blocks that automatic provider
+route. A manual provider/model selection is an explicit override and still goes
+through the normal provider, permission and feature validator. Running sessions
+are not reconfigured. When an existing session is promoted to Lane Manager, the
+plugin sends `/lane-manager Proceed as the lane manager`; delivery failure is
+reported separately from the saved assignment.
 
 ### Workspace Lanes environment
 

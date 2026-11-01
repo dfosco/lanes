@@ -3,9 +3,9 @@ import fs from "node:fs";
 import { findClips, type ClipsCommand as Cli } from "./clips-cli";
 import { assertUnclaimed, launchLaneManager } from "./lane-managers";
 import { acquireLaunchLock } from "./launch-lock";
-import { resolveRoleLaunch } from "./agent-roles";
+import { readProviderUsage, resolveRoleLaunch, type RoleRoute } from "./agent-roles";
 import { loadAgentRoles } from "./agent-role-source";
-import type { AgentRoleDefinition, RoleResolution } from "../shared/agent-roles";
+import { responsibilityType, type AgentRoleDefinition, type RoleResolution } from "../shared/agent-roles";
 import type { ManagerClaim } from "./lane-managers";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +24,7 @@ import {
   branchName, branchPrefix, defaultProvider, executionFor, isActiveAgent, matchesWorkspace,
   promptFor, workspaceTitle, type AgentInfo, type WorkspaceInfo,
 } from "../shared/work";
-import { entryReasoningEffort, orderedRoleRoutes } from "../shared/model-routing";
+import { entryReasoningEffort, orderedRoleRoutes, roleRouteAgents, routingKeyForRole } from "../shared/model-routing";
 
 type Paseo = PluginHandlerContext["paseo"];
 type LocalProject = Project & { root: string; configPath: string };
@@ -383,7 +383,7 @@ export async function saveModelRoutingPolicy(paseo: Paseo, input: ModelRoutingPo
   }
   for (const [role, efforts] of Object.entries(input.modelEffort ?? {})) {
     for (const [choice, effort] of Object.entries(efforts)) {
-      if (!input.modelOrder[role as AgentRole].includes(choice)) throw new Error(`Reasoning effort for ${role} is set on unranked provider/model ${choice}.`);
+      if (!(input.modelOrder[role] ?? []).includes(choice)) throw new Error(`Reasoning effort for ${role} is set on unranked provider/model ${choice}.`);
       const slash = choice.indexOf("/");
       const model = catalog.find((candidate) => candidate.provider === choice.slice(0, slash))?.models
         ?.find((candidate) => candidate.id === choice.slice(slash + 1));
@@ -703,33 +703,73 @@ async function agentConfiguration(
   override?: AgentConfiguration,
   role: AgentRole = "dev",
   projectId?: string,
+  useRoutingPolicy = true,
+  automaticRoute = false,
+  automaticRoutingKey?: string,
 ) {
   const preferences = preferencesSchema.schema.parse(preferencesInput);
   const rolePreferences = preferences.roles[role];
   let roleDefaults: RoleModelDefaults | null = null;
-  if (!override) {
-    const policy = await readModelRoutingPolicy(paseo);
-    for (const route of orderedRoleRoutes(policy, role)) {
-      const provider = route.provider;
-      for (const modelId of route.models) {
-        const agent = await modelAgent(paseo, modelId, provider);
-        if (!agent) continue;
-        const defaults = await readRoleModelDefaults(paseo, role, preferences, {
-          provider, projectId, legacyDisabled: rolePreferences.legacyModelMigrated,
-        });
-        const entries = (await paseo.providers.snapshot({ cwd: root })).entries;
-        const model = entries.find((entry) => entry.provider === provider)?.models?.find((candidate) => candidate.id === modelId);
-        const availableEfforts = model?.thinkingOptions?.map((option) => option.id) ?? [];
-        const effort = entryReasoningEffort(policy, role, provider, modelId, availableEfforts,
-          defaults.reasoningEffort, model?.defaultThinkingOptionId);
-        roleDefaults = { ...defaults, model: modelId, reasoningEffort: effort, agent };
-        break;
-      }
-      if (roleDefaults) break;
-      const candidate = await readRoleModelDefaults(paseo, role, preferences, {
+  if (automaticRoute && override?.provider) {
+    const slash = override.provider.indexOf("/");
+    if (slash > 0) {
+      const provider = override.provider.slice(0, slash);
+      const modelId = override.provider.slice(slash + 1);
+      const policy = await readModelRoutingPolicy(paseo);
+      const defaults = await readRoleModelDefaults(paseo, role, preferences, {
         provider, projectId, legacyDisabled: rolePreferences.legacyModelMigrated,
       });
-      if (candidate.agent) { roleDefaults = candidate; break; }
+      const entries = (await paseo.providers.snapshot({ cwd: root })).entries;
+      const model = entries.find((entry) => entry.provider === provider)?.models?.find((candidate) => candidate.id === modelId);
+      const availableEfforts = model?.thinkingOptions?.map((option) => option.id) ?? [];
+      roleDefaults = {
+        ...defaults, model: modelId,
+        reasoningEffort: override.thinkingOptionId && availableEfforts.includes(override.thinkingOptionId)
+          ? override.thinkingOptionId
+          : entryReasoningEffort(policy, automaticRoutingKey ?? routingKeyForRole(role), provider, modelId,
+            availableEfforts, automaticRoutingKey ? "" : defaults.reasoningEffort, model?.defaultThinkingOptionId),
+        agent: override.provider,
+      };
+    }
+  }
+  if (!override) {
+    if (useRoutingPolicy) {
+      const policy = await readModelRoutingPolicy(paseo);
+      const routeConfigured = (policy.modelOrder[routingKeyForRole(role)] ?? []).length > 0 || policy.providerOrder.length > 0;
+      const quotaBlocked: string[] = [];
+      for (const route of orderedRoleRoutes(policy, role)) {
+        const provider = route.provider;
+        if (routeConfigured) {
+          const usage = await readProviderUsage(paseo, provider);
+          if ("reason" in usage) { quotaBlocked.push(`${provider}: ${usage.reason}`); continue; }
+          if (usage.usedPct >= policy.handoffThreshold) {
+            quotaBlocked.push(`${provider}: ${usage.usedPct}% used (handoff threshold ${policy.handoffThreshold}%).`);
+            continue;
+          }
+        }
+        for (const modelId of route.models) {
+          const agent = await modelAgent(paseo, modelId, provider);
+          if (!agent) continue;
+          const defaults = await readRoleModelDefaults(paseo, role, preferences, {
+            provider, projectId, legacyDisabled: rolePreferences.legacyModelMigrated,
+          });
+          const entries = (await paseo.providers.snapshot({ cwd: root })).entries;
+          const model = entries.find((entry) => entry.provider === provider)?.models?.find((candidate) => candidate.id === modelId);
+          const availableEfforts = model?.thinkingOptions?.map((option) => option.id) ?? [];
+          const effort = entryReasoningEffort(policy, routingKeyForRole(role), provider, modelId, availableEfforts,
+            defaults.reasoningEffort, model?.defaultThinkingOptionId);
+          roleDefaults = { ...defaults, model: modelId, reasoningEffort: effort, agent };
+          break;
+        }
+        if (roleDefaults) break;
+        const candidate = await readRoleModelDefaults(paseo, role, preferences, {
+          provider, projectId, legacyDisabled: rolePreferences.legacyModelMigrated,
+        });
+        if (candidate.agent) { roleDefaults = candidate; break; }
+      }
+      if (!roleDefaults && quotaBlocked.length) {
+        throw new Error(`No automatic ${role} route has fresh usage below the handoff threshold. ${quotaBlocked.join(" ")}`);
+      }
     }
     roleDefaults ??= await readRoleModelDefaults(paseo, role, preferences, {
       projectId, legacyDisabled: rolePreferences.legacyModelMigrated,
@@ -740,9 +780,13 @@ async function agentConfiguration(
   }
   const preference = override ? override.provider : roleDefaults?.agent || rolePreferences.provider || preferences.agent;
   const { selected, provider, entry, model } = await selectedProvider(paseo, root, preference);
-  const thinkingOptionId = override ? override.thinkingOptionId || undefined : roleDefaults?.reasoningEffort || preferences.thinkingOptionId || undefined;
-  const featureValues = override ? override.featureValues : Object.keys(rolePreferences.featureValues).length
-    ? rolePreferences.featureValues : preferences.featureValues;
+  const thinkingOptionId = override && !automaticRoute
+    ? override.thinkingOptionId || undefined
+    : roleDefaults ? roleDefaults.reasoningEffort || undefined : preferences.thinkingOptionId || undefined;
+  const featureValues = automaticRoute
+    ? (Object.keys(rolePreferences.featureValues).length ? rolePreferences.featureValues : preferences.featureValues)
+    : override ? override.featureValues : Object.keys(rolePreferences.featureValues).length
+      ? rolePreferences.featureValues : preferences.featureValues;
   const requestedModeId = override?.modeId ?? rolePreferences.modeId ?? preferences.modeId ?? FULL_ACCESS_MODE;
   if (thinkingOptionId && !model.thinkingOptions?.some((option) => option.id === thinkingOptionId)) {
     throw new Error(`Thinking option ${thinkingOptionId} is unavailable for ${selected}.`);
@@ -789,22 +833,31 @@ async function agentConfiguration(
 }
 
 /**
- * Role launch through the existing validator. Candidate, defaults and manual paths all call agentConfiguration,
- * so provider/model/mode/feature checks stay in one place.
+ * Role launch through the existing validator. Routed and manual paths both call agentConfiguration,
+ * so provider/model/mode/feature checks stay in one place. Every role uses the Routing order.
  */
 export async function roleLaunch(paseo: Paseo, prefs: Preferences, input: {
   root: string; projectId: string; kind: AgentRole; roleId: string; workPrompt: string;
-  agentConfig?: AgentConfiguration; approveMetered?: boolean; roles?: readonly AgentRoleDefinition[];
+  agentConfig?: AgentConfiguration; roles?: readonly AgentRoleDefinition[];
 }): Promise<RoleResolution> {
   const roles = input.roles ?? (await loadAgentRoles()).roles;
-  const rolePreferences = prefs.roles[input.kind];
+  const selectedRole = roles.find((role) => role.id === input.roleId);
+  const defaultsRole: AgentRole = selectedRole && responsibilityType(selectedRole) === "planner" ? "manager" : "dev";
+  const automaticRoutingKey = input.roleId === "lane-manager" || input.roleId === "lane-dev" ? undefined : input.roleId;
+  const policy = await readModelRoutingPolicy(paseo);
+  const routes: RoleRoute[] = roleRouteAgents(policy, input.roleId);
   return resolveRoleLaunch({
-    paseo, roles, roleId: input.roleId, cwd: input.root,
-    baselineModeId: rolePreferences.modeId || prefs.modeId || FULL_ACCESS_MODE,
-    configure: (override) => agentConfiguration(paseo, input.root, prefs, override, input.kind, input.projectId),
+    paseo, roles, roleId: input.roleId, cwd: input.root, routes,
+    handoffThreshold: policy.handoffThreshold,
+    warningThresholds: policy.warningThresholds,
+    // The role resolver owns modelOrder selection. An empty role order must reach saved role defaults,
+    // not fall back through the Lane Dev order via the shared launch validator.
+    configure: (override, options) => agentConfiguration(
+      paseo, input.root, prefs, override, defaultsRole, input.projectId, false, options?.automaticRoute,
+      options?.automaticRoute ? automaticRoutingKey : undefined,
+    ),
     workPrompt: input.workPrompt,
     agentConfig: input.agentConfig,
-    approveMetered: input.approveMetered,
   });
 }
 
@@ -825,7 +878,7 @@ export async function startWork(
   prefs: Preferences,
   input: {
     projectId: string; ref: string; mode: StartMode; workspaceId?: string; agentConfig?: AgentConfiguration; hostId?: string;
-    roleId?: string; approveMetered?: boolean;
+    roleId?: string;
   },
 ) {
   const project = await findProject(paseo, input.projectId);
@@ -859,7 +912,7 @@ export async function startWork(
       }
       const role = await roleLaunch(paseo, prefs, {
         root: project.root, projectId: project.projectId, kind: roleKind, roleId: input.roleId,
-        workPrompt: promptFor(target), agentConfig: input.agentConfig, approveMetered: input.approveMetered,
+        workPrompt: promptFor(target), agentConfig: input.agentConfig,
       });
       return { config: role.config, prompt: role.prompt ?? promptFor(target), role };
     };

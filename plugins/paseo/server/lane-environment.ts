@@ -503,11 +503,23 @@ export function createLaneEnvironment(dependencies: LaneEnvironmentDependencies)
           state.workspaces[input.workspaceId] = record;
           return viewOf(input.workspaceId, state, current);
         });
+        // A running session's system prompt cannot change, so invoke the lane-manager skill command directly.
+        let guidanceDelivered: boolean | null = null;
+        let guidanceError: string | null = null;
+        try {
+          await paseo.agents.ref(agent.id).send("/lane-manager Proceed as the lane manager");
+          guidanceDelivered = true;
+        } catch (error) {
+          guidanceDelivered = false; guidanceError = `Lane Manager guidance was not delivered: ${String(error)}`;
+          warn(`[paseo] ${guidanceError}`);
+        }
         return {
           storeRevision: committed.storeRevision,
           workspace: committed.result,
           assignmentApplied: true,
           assignmentError: null,
+          guidanceDelivered,
+          guidanceError,
           titleApplied: true,
           titleError: null,
           advisoryTitle: managerTitle,

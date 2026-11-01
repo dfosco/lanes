@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Switch, Text, View } from "react-native";
 import { agentOptionsRpc, type AgentConfiguration } from "../shared/contracts";
-import { rolesListRpc } from "../shared/agent-roles";
+import { responsibilityType, rolesListRpc } from "../shared/agent-roles";
 import {
   FULL_ACCESS_MODE, RESTRICTED_MODE, fullAccessModeId, restrictedAccessModeId,
 } from "../shared/permission-modes";
@@ -35,6 +35,7 @@ type ProviderFeature = {
 export function AgentConfigFields({
   theme, hostId, projectId, agent, providerId, thinkingOptionId, featureValues, onAgentChange,
   onThinkingChange, onFeatureValuesChange, modeId, onModeChange, allowAutomatic, modelHint,
+  showModel = true, showThinking = true,
 }: {
   theme: Theme;
   hostId: string;
@@ -50,6 +51,8 @@ export function AgentConfigFields({
   onModeChange: (value: string) => void;
   allowAutomatic: boolean;
   modelHint?: string;
+  showModel?: boolean;
+  showThinking?: boolean;
 }) {
   const paseo = usePaseo();
   const fetchAgentOptions = useRpc(agentOptionsRpc);
@@ -131,7 +134,7 @@ export function AgentConfigFields({
 
   return (
     <View style={{ gap: 10 }}>
-      <SettingsSelect
+      {showModel ? <SettingsSelect
          label={providerId ? "Default model" : "Paseo agent"}
          hint={modelHint ?? (providerId ? `Model saved for ${providerId}.` : "Provider and model used for this launch.")}
          value={selectedModel}
@@ -142,7 +145,7 @@ export function AgentConfigFields({
           onFeatureValuesChange({});
           onModeChange(FULL_ACCESS_MODE);
         }}
-      />
+      /> : null}
       {catalog.isLoading ? <ActivityIndicator color={theme.colors.foregroundMuted} /> : null}
       {catalog.isError ? (
         <Text style={{ color: theme.colors.statusDanger, fontSize: 12 }}>
@@ -160,7 +163,7 @@ export function AgentConfigFields({
           Select a default model to load model-specific reasoning and provider options.
         </Text>
       ) : null}
-      {thinkingOptions.length ? (
+      {showThinking && thinkingOptions.length ? (
         <SettingsSelect
           label="Thinking"
           hint="Reasoning level for the selected model."
@@ -237,7 +240,7 @@ export function AgentLaunchDialog({
   busy: boolean;
   defaultRoleId?: string;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (config?: AgentConfiguration, roleId?: string, approveMetered?: boolean) => void;
+  onSubmit: (config?: AgentConfiguration, roleId?: string) => void;
 }) {
   const paseo = usePaseo();
   const fetchRoles = useRpc(rolesListRpc);
@@ -253,7 +256,6 @@ export function AgentLaunchDialog({
   const [modeId, setModeId] = useState(defaults.modeId || FULL_ACCESS_MODE);
   const [roleId, setRoleId] = useState(defaultRoleId ?? "");
   const [manualConfiguration, setManualConfiguration] = useState(!defaultRoleId);
-  const [approveMetered, setApproveMetered] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -263,7 +265,6 @@ export function AgentLaunchDialog({
     setModeId(defaults.modeId || FULL_ACCESS_MODE);
     setRoleId(defaultRoleId ?? "");
     setManualConfiguration(!defaultRoleId);
-    setApproveMetered(false);
   }, [open, defaults.agent, defaults.thinkingOptionId, defaults.featureValues, defaults.modeId, fallbackAgent, defaultRoleId]);
 
   const selectedRole = rolesQuery.data?.roles.find((role) => role.id === roleId);
@@ -285,26 +286,15 @@ export function AgentLaunchDialog({
           </Text> : null}
           <SettingsSelect label="Launch as" value={roleId} options={[
             { value: "", label: "Manual launch" },
-            ...(rolesQuery.data?.roles ?? []).map((role) => ({ value: role.id, label: `${role.name}${role.candidates.length ? ` · ${role.candidates.length} ordered choices` : ""}` })),
-          ]} onValueChange={(value) => { setRoleId(value); setManualConfiguration(!value); setApproveMetered(false); }} />
+            ...(rolesQuery.data?.roles ?? []).map((role) => ({ value: role.id, label: `${responsibilityType(role)} · ${role.name}` })),
+          ]} onValueChange={(value) => { setRoleId(value); setManualConfiguration(!value); }} />
           {roleId && selectedRole ? <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12, lineHeight: 17 }}>
-            {selectedRole.description || "The host resolves this role’s ordered launch choices and adds its instructions/skills to the new session."}
-            {selectedRole.candidates.length ? ` · First preference: ${selectedRole.candidates.length} saved choice${selectedRole.candidates.length === 1 ? "" : "s"}.` : " · Uses the configured role defaults."}
+            {selectedRole.description || "The host adds this role’s instructions and skills to the new session."} {responsibilityType(selectedRole)} role defaults apply. Model order comes from Model Routing.
           </Text> : null}
           {roleId ? <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <Switch value={manualConfiguration} onValueChange={(value) => {
-              setManualConfiguration(value);
-              if (value) setApproveMetered(false);
-            }}
+            <Switch value={manualConfiguration} onValueChange={setManualConfiguration}
               trackColor={{ false: theme.colors.border, true: theme.colors.accent }} />
             <Text style={{ color: theme.colors.foreground, fontSize: 12, flex: 1 }}>Override this role with manual provider, model, and permission options</Text>
-          </View> : null}
-          {selectedRole?.candidates.some((candidate) => candidate.metered) && !manualConfiguration ? <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <Switch value={approveMetered} onValueChange={setApproveMetered}
-              trackColor={{ false: theme.colors.border, true: theme.colors.accent }} />
-            <Text style={{ color: theme.colors.foreground, fontSize: 12, flex: 1 }}>
-              Approve paid/metered fallback for this launch only
-            </Text>
           </View> : null}
           {manualConfiguration ? <AgentConfigFields
               theme={theme}
@@ -326,7 +316,7 @@ export function AgentLaunchDialog({
           <DialogButton label={busy ? "Starting…" : "Start agent"} theme={theme} disabled={busy || !canStart}
             onPress={() => onSubmit(manualConfiguration ? {
               provider: agent, thinkingOptionId: thinkingOptionId || undefined, featureValues, modeId,
-            } : undefined, roleId || undefined, approveMetered)} />
+            } : undefined, roleId || undefined)} />
         </View>
       </Modal.Content>
     </Modal>

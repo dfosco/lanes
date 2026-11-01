@@ -44,8 +44,7 @@ Options:
   --workspace <id>             Add the agent to an existing workspace
   --base <branch>              Base branch for a new worktree; defaults to current branch
   --host-id <observed-id>       Required for Lane manager starts; same host ID shown by the app
-  --role <id>                  Launch with a plugin-owned role (ordered live candidates)
-  --approve-metered            Approve a metered role candidate for this launch only
+  --role <id>                  Launch with a plugin-owned role (Routing model order)
   --plugin-id <id>             Plugin ID for role RPCs (default: this checkout's paseo-plugin.json; or LANES_PAESO_PLUGIN_ID)
   --title <text>               Agent title
   --url <ws-url>               Paseo daemon WebSocket URL (default ws://127.0.0.1:6767/ws)
@@ -63,7 +62,7 @@ function parseArgs(argv) {
   while (argv.length) {
     const flag = argv.shift();
     if (flag === "--help" || flag === "-h") return { command: "help", options };
-    if (flag === "--json" || flag === "--dry-run" || flag === "--watch" || flag === "--approve-metered") {
+    if (flag === "--json" || flag === "--dry-run" || flag === "--watch") {
       options[flag.slice(2)] = true;
       continue;
     }
@@ -361,7 +360,6 @@ async function roleLaunch(driver, root, projectId, target, agent, options) {
       ...(options.mode || options.permission ? { modeId: options.mode ?? options.permission } : {}),
       featureValues,
     } } : {}),
-    ...(options["approve-metered"] ? { approveMetered: true } : {}),
   });
   return { config: resolution.config, prompt: resolution.prompt, roleResolution: resolution };
 }
