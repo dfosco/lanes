@@ -1,12 +1,12 @@
 {
   "name": "@dfosco/lanes",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@dfosco/lanes",
-      "version": "2.2.0",
+      "version": "3.0.0",
       "license": "MIT",
       "dependencies": {
         "skillshop": "2.1.0"

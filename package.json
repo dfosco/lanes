@@ -1,6 +1,6 @@
 {
   "name": "@dfosco/lanes",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "description": "Local-first planning and change-record workflow CLI",
   "type": "module",
   "bin": {
